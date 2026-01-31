@@ -1,0 +1,460 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • NATAL & TRANSIT ASPECT TABLE
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @indicator    Natal & Transit Planetary Aspect Table
+// @description  Displays a comprehensive aspect table comparing natal (birth)
+//               planetary positions with transit (current) positions. Supports
+//               geocentric and heliocentric coordinates, 14 aspect types with
+//               configurable orbs, and applying/separating detection.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      Mozilla Public License 2.0 (MPL 2.0)
+//
+// @features     • 14 configurable aspect types (conjunction through novile)
+//               • Applying vs separating aspect detection
+//               • Geocentric/heliocentric toggle
+//               • 20+ preset natal dates (BTC, ETH, NYSE, commodities, etc.)
+//               • Live transits or manual test mode
+//               • Customizable table position, colors, and text size
+//
+// @accuracy     Uses Blueprint Research ephemeris libraries (VSOP87, ELP2000-82,
+//               Meeus). Accuracy suitable for financial astrology aspects.
+//               Positions may differ slightly from other ephemerides (< 1°).
+//
+// @depends      BlueprintResearch/lib_ephemeris/1
+//
+// @open_source  Part of the open-source Planetary Ephemeris project.
+//               Study, modify, and share freely.
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025 BlueprintResearch / Javonnii
+//   Licensed under Mozilla Public License 2.0
+// ════════════════════════════════════════════════════════════════
+//
+
+//@version=6
+indicator("Natal & Transit Planetary Aspect Table", overlay=true)
+
+import BlueprintResearch/lib_ephemeris/1 as eph
+
+
+// === Group + Tooltip ===
+gr1 = "First Trade DateTime"
+gr2 = "Transit DateTime"
+gr3 = "Table Settings"
+
+tooltip = "Select a pre-define first trade date preset or select manual first trade and adjust the timestamp below to set a manual natal date."
+
+// === Dropdown Options ===
+dateOption = input.string(defval="Manual First Trade", title="Select Preset or Manual", options=[ "Manual First Trade", "BTC", "ETH", "SoyBean", "NYSE", "DOGE", "Wheat Futures", "EuroFX Futures", "British Pound Futures", "Canadian Dollar Futures", "Japanese Yen Futures", "Mexican Peso Futures", "Swiss Franc Futures", "WTI Crude Oil Futures", "10Y T-Note Futures", "Gold Futures (COMEX)", "Copper Futures", "Silver Futures (COMEX)", "LME Gold Futures", "LME Silver Futures", "S&P 500 Index", "DJIA", "S&P 500 Options", "SPDR ETF"], group=gr1, tooltip=tooltip)
+
+
+// === Manual Input ===
+manualDate = input.time(timestamp("1776-07-04 22:10:00 +0000"), "Manual First Trade Date", group=gr1, confirm = false)
+
+
+// Add near other inputs, e.g., after dateOption and manualDate
+transit_mode = input.string("Live Transits", "Transit Mode", options=["Live Transits", "Test Mode"], group=gr2, tooltip = "Live Transits is real-time based on your chart's timeframe. Test modes allows user to adjust transit timestamp below against selected first trade date.")
+
+
+manual_transit = input.time(0, "Manual Transit Timestamp", group=gr2, confirm= false)
+
+
+// === Date Logic (All UTC Adjusted) ===
+selectedDate = switch dateOption
+    "BTC"                     => timestamp("2009-01-03 18:15:00 +0000")
+    "ETH"                     => timestamp("2015-07-30 15:26:00 +0000")
+    "SoyBean"                 => timestamp("1936-10-05 00:00 +0000")
+    "NYSE"                    => timestamp("1792-05-17 04:00:00 +0000")
+    "DOGE"                    => timestamp("2014-01-08 18:00:00 +0000") // 10am PST
+    "Wheat Futures"           => timestamp("1865-10-14 17:00 +0000") // 11am CST
+    "EuroFX Futures"          => timestamp("1998-05-19 19:30 +0000") // 2:30pm CDT
+    "British Pound Futures"   => timestamp("1972-05-16 14:00 +0000")
+    "Canadian Dollar Futures" => timestamp("1972-05-16 14:02 +0000")
+    "Japanese Yen Futures"    => timestamp("1972-05-16 14:08 +0000")
+    "Mexican Peso Futures"    => timestamp("1972-05-16 14:10 +0000")
+    "Swiss Franc Futures"     => timestamp("1972-05-16 14:12 +0000")
+    "WTI Crude Oil Futures"   => timestamp("1983-03-30 14:30 +0000") // 9:30am EST
+    "10Y T-Note Futures"      => timestamp("1982-05-03 15:00 +0000") // 10am CDT
+    "Gold Futures (COMEX)"    => timestamp("1974-12-31 14:45 +0000") // 9:45am EST
+    "Copper Futures"          => timestamp("1929-05-15 15:00 +0000") // 10am EST
+    "Silver Futures (COMEX)"  => timestamp("1931-06-15 15:00 +0000") // 10am EST
+    "LME Gold Futures"        => timestamp("2017-07-10 07:03 +0000") // 8:03am London = 7:03 UTC
+    "LME Silver Futures"      => timestamp("2017-07-10 08:05 +0000") // 9:05am London = 8:05 UTC
+    "S&P 500 Index"           => timestamp("1957-03-04 15:00 +0000") // 10am EST
+    "DJIA"                    => timestamp("1896-05-26 20:00 +0000") // 3pm EST
+    "S&P 500 Options"         => timestamp("1983-01-28 15:00 +0000") // 9am CST
+    "SPDR ETF"                => timestamp("1993-01-22 14:30 +0000") // 9:30am EST
+    => manualDate
+
+gt = selectedDate
+
+
+// Change gtt assignment
+gtt = transit_mode == "Live Transits" ? time : manual_transit
+
+
+// tooltip Dates Selected 
+
+tooltip_date_1 = str.format_time(selectedDate, "yyyy-MM-dd HH:mm")
+tooltip_date_2 = str.format_time(gtt, "yyyy-MM-dd HH:mm")
+
+
+// Coordinate system toggle
+geo = input.bool(true, "Geocentric?", tooltip="Leave this box unchecked for heliocentric.", group=gr3)
+centricSign = geo ? "𝒢" : "ℋ"
+
+// Determine number of bodies
+int num_bodies = geo ? 10 : 11
+int num_cols = geo ? 12 : 13
+int num_rows = geo ? 11 : 12
+
+
+
+sym = input.bool(true, "Symbols?", group= gr3, tooltip="Leave this box unchecked for full planet names.")
+
+iTxtSize=input.string("Normal", title="Text Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group= gr3, inline="1")
+vTxtSize = iTxtSize == "Auto"   ? size.auto  :
+             iTxtSize == "Tiny"   ? size.tiny  :
+             iTxtSize == "Small"  ? size.small :
+             iTxtSize == "Normal" ? size.normal:
+             iTxtSize == "Large"  ? size.large :
+             iTxtSize == "Huge"   ? size.huge  :
+             size.small
+
+TP1="▽", TP2="◺", TP3="◿"
+TP4="◆", TP5="◁", TP6="▷"
+TP7="△", TP8="◸", TP9="◹"
+pos1 = position.bottom_center , pos2 = position.bottom_left , pos3 = position.bottom_right
+pos4 = position.middle_center , pos5 = position.middle_left , pos6 = position.middle_right
+pos7 = position.top_center , pos8 = position.top_left, pos9 = position.top_right
+
+show_event=input.bool(true, title="Show", group= gr3, inline="2")
+iTPos1=input.string(TP3, title="Table", options=[TP1,TP2,TP3,TP4,TP5,TP6,TP7,TP8,TP9], group= gr3, inline="2")
+
+bg_col = input.color(color.gray, "Background", group= gr3, inline="4")
+txt_col = input.color(color.rgb(0, 0, 0), "Text", group= gr3, inline="4")
+
+vTPos1 = iTPos1 == TP1 ? pos1 : iTPos1 == TP2 ? pos2 : iTPos1 == TP3 ? pos3 :
+         iTPos1 == TP4 ? pos4 : iTPos1 == TP5 ? pos5 : iTPos1 == TP6 ? pos6 :
+         iTPos1 == TP7 ? pos7 : iTPos1 == TP8 ? pos8 : iTPos1 == TP9 ? pos9 : pos3
+
+// Aspect Settings
+group_aspects = "Aspect Settings"
+
+conj_show = input.bool(true, "Show Conjunction ☌", group=group_aspects)
+conj_orb = input.float(8.0, "Conjunction Orb (°)", minval=0.0, group=group_aspects)
+conj_color = input.color(color.blue, "Conjunction Color", group=group_aspects)
+
+opp_show = input.bool(true, "Show Opposition ☍", group=group_aspects)
+opp_orb = input.float(6.0, "Opposition Orb (°)", minval=0.0, group=group_aspects)
+opp_color = input.color(color.red, "Opposition Color", group=group_aspects)
+
+trine_show = input.bool(true, "Show Trine △", group=group_aspects)
+trine_orb = input.float(6.0, "Trine Orb (°)", minval=0.0, group=group_aspects)
+trine_color = input.color(color.green, "Trine Color", group=group_aspects)
+
+square_show = input.bool(true, "Show Square □", group=group_aspects)
+square_orb = input.float(6.0, "Square Orb (°)", minval=0.0, group=group_aspects)
+square_color = input.color(color.orange, "Square Color", group=group_aspects)
+
+sextile_show = input.bool(true, "Show Sextile ⚹", group=group_aspects)
+sextile_orb = input.float(2.0, "Sextile Orb (°)", minval=0.0, group=group_aspects)
+sextile_color = input.color(color.lime, "Sextile Color", group=group_aspects)
+
+semisext_show = input.bool(false, "Show Semi-Sextile ⚺", group=group_aspects)
+semisext_orb = input.float(2.0, "Semi-Sextile Orb (°)", minval=0.0, group=group_aspects)
+semisext_color = input.color(color.purple, "Semi-Sextile Color", group=group_aspects)
+
+quinc_show = input.bool(false, "Show Quincunx ⚻", group=group_aspects)
+quinc_orb = input.float(2.0, "Quincunx Orb (°)", minval=0.0, group=group_aspects)
+quinc_color = input.color(color.gray, "Quincunx Color", group=group_aspects)
+
+semisquare_show = input.bool(false, "Show Semi-Square ∠", group=group_aspects)
+semisquare_orb = input.float(2.0, "Semi-Square Orb (°)", minval=0.0, group=group_aspects)
+semisquare_color = input.color(color.maroon, "Semi-Square Color", group=group_aspects)
+
+sesqui_show = input.bool(false, "Show Sesquiquadrate ⚼", group=group_aspects)
+sesqui_orb = input.float(2.0, "Sesquiquadrate Orb (°)", minval=0.0, group=group_aspects)
+sesqui_color = input.color(color.teal, "Sesquiquadrate Color", group=group_aspects)
+
+quintile_show = input.bool(false, "Show Quintile Q", group=group_aspects)
+quintile_orb = input.float(2.0, "Quintile Orb (°)", minval=0.0, group=group_aspects)
+quintile_color = input.color(color.aqua, "Quintile Color", group=group_aspects)
+
+biqu_show = input.bool(false, "Show Biquintile bQ", group=group_aspects)
+biqu_orb = input.float(2.0, "Biquintile Orb (°)", minval=0.0, group=group_aspects)
+biqu_color = input.color(color.fuchsia, "Biquintile Color", group=group_aspects)
+
+sept_show = input.bool(false, "Show Septile S", group=group_aspects)
+sept_orb = input.float(1.0, "Septile Orb (°)", minval=0.0, group=group_aspects)
+sept_color = input.color(color.silver, "Septile Color", group=group_aspects)
+
+nov_show = input.bool(false, "Show Novile N", group=group_aspects)
+nov_orb = input.float(1.0, "Novile Orb (°)", minval=0.0, group=group_aspects)
+nov_color = input.color(color.navy, "Novile Color", group=group_aspects)
+
+// ═══════════════════════════════════════════════════════════════════
+// Local Utility Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Convert longitude to degree-sign format (e.g., "15°♈32'")
+degsign(float lon) =>
+    signs = array.from("♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓")
+    norm = lon % 360
+    norm := norm < 0 ? norm + 360 : norm
+    sign_idx = int(norm / 30)
+    deg_in_sign = norm % 30
+    deg = int(deg_in_sign)
+    min = int((deg_in_sign - deg) * 60)
+    str.tostring(deg) + "°" + array.get(signs, sign_idx) + str.tostring(min) + "'"
+
+// Get planet glyph symbol by index
+get_planet_symbol(int idx, bool use_geo) =>
+    symbols_geo = array.from("☉", "☽", "☿", "♀", "♂", "♃", "♄", "♅", "♆", "♇")
+    symbols_helio = array.from("☉", "☽", "☿", "♀", "⊕", "♂", "♃", "♄", "♅", "♆", "♇")
+    array.get(use_geo ? symbols_geo : symbols_helio, idx)
+
+// ═══════════════════════════════════════════════════════════════════
+// Planet Definitions
+// ═══════════════════════════════════════════════════════════════════
+
+// Planet arrays using lib_ephemeris enum
+array<eph.Planet> planets_geo = array.from(
+    eph.Planet.Sun, eph.Planet.Moon, eph.Planet.Mercury, eph.Planet.Venus,
+    eph.Planet.Mars, eph.Planet.Jupiter, eph.Planet.Saturn, eph.Planet.Uranus,
+    eph.Planet.Neptune, eph.Planet.Pluto
+)
+
+array<eph.Planet> planets_helio = array.from(
+    eph.Planet.Sun, eph.Planet.Moon, eph.Planet.Mercury, eph.Planet.Venus,
+    eph.Planet.Earth, eph.Planet.Mars, eph.Planet.Jupiter, eph.Planet.Saturn,
+    eph.Planet.Uranus, eph.Planet.Neptune, eph.Planet.Pluto
+)
+
+// Display name arrays
+array<string> planet_full_geo = array.from("Sun", "Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto")
+array<string> planet_full_helio = array.from("Sun", "Moon", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto")
+array<string> planet_full = geo ? planet_full_geo : planet_full_helio
+
+// ═══════════════════════════════════════════════════════════════════
+// Core Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Get planet symbol by index
+get_symbol(int i) =>
+    get_planet_symbol(i, geo)
+
+// Get planetary longitude using lib_ephemeris
+get_long(int i, int timestamp_ms) =>
+    array<eph.Planet> planets = geo ? planets_geo : planets_helio
+    eph.Planet p = array.get(planets, i)
+    eph.get_longitude(p, timestamp_ms, geo)
+
+// Wrap any float to [0,360)
+wrap360(float x) =>
+    x - 360.0 * math.floor(x / 360.0)
+
+// Absolute separation in [0,180]
+sep_deg(float a, float b) =>
+    w = wrap360((a - b) + 540.0)  // shift, wrap, then unshift
+    math.abs(w - 180.0)
+
+
+get_aspect_details(float d, float d_prev) =>
+    float min_orb = 999.0
+    string aspect_sym = na
+    color aspect_c = na
+    bool is_applying = false
+
+    if conj_show
+        float this_orb = math.abs(d - 0.0)
+        if this_orb <= conj_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "☌"
+            aspect_c := conj_color
+            float prev_orb = math.abs(d_prev - 0.0)
+            is_applying := this_orb < prev_orb
+
+    if opp_show
+        float this_orb = math.abs(d - 180.0)
+        if this_orb <= opp_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "☍"
+            aspect_c := opp_color
+            float prev_orb = math.abs(d_prev - 180.0)
+            is_applying := this_orb < prev_orb
+
+    if trine_show
+        float this_orb = math.abs(d - 120.0)
+        if this_orb <= trine_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "△"
+            aspect_c := trine_color
+            float prev_orb = math.abs(d_prev - 120.0)
+            is_applying := this_orb < prev_orb
+
+    if square_show
+        float this_orb = math.abs(d - 90.0)
+        if this_orb <= square_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "□"
+            aspect_c := square_color
+            float prev_orb = math.abs(d_prev - 90.0)
+            is_applying := this_orb < prev_orb
+
+    if sextile_show
+        float this_orb = math.abs(d - 60.0)
+        if this_orb <= sextile_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "⚹"
+            aspect_c := sextile_color
+            float prev_orb = math.abs(d_prev - 60.0)
+            is_applying := this_orb < prev_orb
+
+    if semisext_show
+        float this_orb = math.abs(d - 30.0)
+        if this_orb <= semisext_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "⚺"
+            aspect_c := semisext_color
+            float prev_orb = math.abs(d_prev - 30.0)
+            is_applying := this_orb < prev_orb
+
+    if quinc_show
+        float this_orb = math.abs(d - 150.0)
+        if this_orb <= quinc_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "⚻"
+            aspect_c := quinc_color
+            float prev_orb = math.abs(d_prev - 150.0)
+            is_applying := this_orb < prev_orb
+
+    if semisquare_show
+        float this_orb = math.abs(d - 45.0)
+        if this_orb <= semisquare_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "∠"
+            aspect_c := semisquare_color
+            float prev_orb = math.abs(d_prev - 45.0)
+            is_applying := this_orb < prev_orb
+
+    if sesqui_show
+        float this_orb = math.abs(d - 135.0)
+        if this_orb <= sesqui_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "⚼"
+            aspect_c := sesqui_color
+            float prev_orb = math.abs(d_prev - 135.0)
+            is_applying := this_orb < prev_orb
+
+    if quintile_show
+        float this_orb = math.abs(d - 72.0)
+        if this_orb <= quintile_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "Q"
+            aspect_c := quintile_color
+            float prev_orb = math.abs(d_prev - 72.0)
+            is_applying := this_orb < prev_orb
+
+    if biqu_show
+        float this_orb = math.abs(d - 144.0)
+        if this_orb <= biqu_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "bQ"
+            aspect_c := biqu_color
+            float prev_orb = math.abs(d_prev - 144.0)
+            is_applying := this_orb < prev_orb
+
+    if sept_show
+        float this_orb = math.abs(d - (360.0 / 7))
+        if this_orb <= sept_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "S"
+            aspect_c := sept_color
+            float prev_orb = math.abs(d_prev - (360.0 / 7))
+            is_applying := this_orb < prev_orb
+
+    if nov_show
+        float this_orb = math.abs(d - 40.0)
+        if this_orb <= nov_orb and this_orb < min_orb
+            min_orb := this_orb
+            aspect_sym := "N"
+            aspect_c := nov_color
+            float prev_orb = math.abs(d_prev - 40.0)
+            is_applying := this_orb < prev_orb
+
+    [aspect_sym, aspect_c, is_applying, min_orb]
+
+// Timestamps (lib_ephemeris uses Unix milliseconds directly)
+transit_time = gtt   // Transit timestamp (already Unix ms)
+natal_time = gt      // Natal timestamp (already Unix ms)
+prev_transit_time = transit_mode == "Live Transits" ? time[1] : (gtt - timeframe.in_seconds() * 1000)
+
+var table aspects = table.new(vTPos1, columns=num_cols, rows=num_rows, border_width=1, frame_color = color.new(bg_col, 50), frame_width = 1, border_color = color.new(bg_col, 50))
+if barstate.islast and show_event
+
+    // Compute longitudes
+    array<float> trans_long = array.new_float(num_bodies, na)
+    array<float> trans_prev_long = array.new_float(num_bodies, na)
+    array<float> natal_long = array.new_float(num_bodies, na)
+
+    for i = 0 to num_bodies - 1
+        array.set(natal_long, i, get_long(i, natal_time))
+        array.set(trans_long, i, get_long(i, transit_time))
+        array.set(trans_prev_long, i, get_long(i, prev_transit_time))
+
+    // Column offsets for new layout
+    transit_sym_col = 0
+    transit_deg_col = 1
+    first_natal_col = 2
+
+    // Transit labels and degrees
+    for i = 0 to num_bodies - 1
+        string ps = sym ? get_symbol(i) : array.get(planet_full, i)
+        table.cell(aspects, column=transit_sym_col, row=i+1, text=ps, bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+        string ttip_trans = str.tostring(math.round(array.get(trans_long, i), 2)) + " | " + degsign(array.get(trans_long, i))
+        table.cell(aspects, column=transit_deg_col, row=i+1, text=degsign(array.get(trans_long, i)), bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize, tooltip=ttip_trans)
+
+    // Headers for transit columns
+    table.cell(aspects, column=transit_sym_col, row=0, text=sym ? centricSign : "Transits", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(aspects, column=transit_deg_col, row=0, text= "➡️" + dateOption + "\n" + "⬇️" + transit_mode, text_color=txt_col, bgcolor=bg_col, tooltip = "Transit date: " + tooltip_date_2 + "\n" + "First Trade Date: " + tooltip_date_1)
+
+    // Natal headers 
+    for natal_offset = 0 to num_bodies - 1
+        col = first_natal_col + natal_offset
+        int p_idx = natal_offset
+        string ps = sym ? get_symbol(p_idx) : array.get(planet_full, p_idx)
+        string ttip = str.tostring(math.round(array.get(natal_long, p_idx), 2)) + " | " + degsign(array.get(natal_long, p_idx))
+        table.cell(aspects, column=col, row=0, text=ps, bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize, tooltip=ttip)
+
+    // Fill aspect cells
+    for natal_offset = 0 to num_bodies - 1
+        col = first_natal_col + natal_offset
+        int natal_idx = natal_offset
+        for row_offset = 0 to num_bodies - 1  
+            row = row_offset + 1
+            int trans_idx = row_offset
+            float d = sep_deg(array.get(trans_long, trans_idx), array.get(natal_long, natal_idx))
+            float d_prev = sep_deg(array.get(trans_prev_long, trans_idx), array.get(natal_long, natal_idx))
+
+            [aspect_sym, aspect_c, is_applying, min_orb] = get_aspect_details(d, d_prev)
+
+            if not na(aspect_sym)
+                string tag = is_applying ? "a" : "s"
+                float signed_orb = is_applying ? -min_orb : min_orb
+                string orb_str = str.tostring(signed_orb, "#.1") + "°"
+                string cell_text = aspect_sym + tag
+                string tt = orb_str + " " + (is_applying ? "Applying" : "Separating")
+                table.cell(aspects, column=col, row=row, text=cell_text, bgcolor=aspect_c, text_color=txt_col, text_size=vTxtSize, tooltip=tt)
+            else
+                table.cell(aspects, column=col, row=row, text="", bgcolor=na, text_color=txt_col, text_size=vTxtSize)

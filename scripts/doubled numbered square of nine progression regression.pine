@@ -1,0 +1,724 @@
+//@version=5
+// SPDX-License-Identifier: MPL-2.0
+//
+// This source code is licensed under the Mozilla Public License 2.0 (MPL-2.0).
+// Full license text: https://mozilla.org/MPL/2.0/
+//
+// This script contains original work by [Javonnii]
+// and includes code from:
+// - ThiagoSchmitz (MPL-2.0)
+//
+//
+// Contributor Notice:
+// - Any modifications, improvements, or forks of this script must include
+//   clear attribution to the original author ([Javonnii]).
+// - If redistributed, a link to the original source must be provided.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the Mozilla Public License, Version 2.0 as published by
+// the Mozilla Foundation. You should have received a copy of the MPL-2.0
+// along with this program. If not, see https://mozilla.org/MPL/2.0/
+//
+// Author: [Javonnii]
+
+
+indicator("Doubled Numbered So9 Progression | Regression - Blueprint_So9", overlay=true, max_labels_count=500, max_lines_count = 500 , max_bars_back = 500)
+
+// 
+group_label = "Select Timestamp"
+tooltip1 = "Select High if your timestamp is set at a high pivot. Select Low is your timestamp is set at a low. This High or Low of the candle will start the So9."
+tooltip2 = "It's easier to grab the vertical line and select the timestamp of a significant high or low pivot on any timeframe. Pivots generated after this timestamp will be plotted on the So9. Afterwards, make sure to select whether it's a high or low the you've placed the timestamp on below."
+tooltip3 = "If you've selected a High Pivot make sure to place this 1 or more. If you've select a Low pivot make sure to place this -1 or less."
+tooltip4 = "Definition: The Pivot Points High Low indicator is used to determine and anticipate potential changes in market price and reversals. The Highs referred to in the title are created based on the number of bars that exhibit lower highs on either side of a Pivot Point High, whereas the Lows are created based on the number of bars that exhibit higher lows on either side of a Pivot Point Low. Calculations: As mentioned above, Pivot Point Highs are calculated by the number of bars with lower highs on either side of a Pivot Point High calculation. Similarly, Pivot Point Lows are calculated by the number of bars with higher lows on either side of a Pivot Point Low calculation."
+tooltip5 = "Pivot Point Highs: Determined by counting bars with lower highs on both sides of a high point. Pivot Point Lows: Determined by counting bars with higher lows on both sides of a low point."
+tooltip6 = "For low price stocks, start with 0.01, 0.05, or 0.10. For medium price stocks, start with 0.10, 0.25, 0.50. For high price stocks, start with 0.25, 0.50, or 1.00. For Stock indexes, start with 1, 5, 10, or 25."
+tooltip7 = "SQ9 bar count from the selected pivot"
+
+dateTime = input.time(0, "Select a signficant High or Low", group = group_label, confirm = true)
+selectHL = input.string("Low", "Select High/Low", options=["High", "Low"], group = group_label, tooltip = tooltip1)
+var float increase = input.float(1.0, "Price Increment/Decrement per Cell", group= group_label, tooltip = tooltip6)
+var int levels = input.int(3, "SQ9 Rotations", group= group_label)
+rounding = input.int(0, "Increase or Reduce Price rounding precision", group = group_label)
+show_time = input.bool(true, "Show/Hide Time Variable within the SQ9", group = group_label)
+
+nine = "Choose a SQ9 Angle to Plot Support and Resistance Levels"
+
+// Rotary selection for angles with no default selection
+angleSelection = input.string("None", "Select Angle", options = ["None", "0°", "45°", "90°", "135°", "180°", "225°", "270°", "315°"], group = nine)
+
+// Assigning the selection to corresponding boolean variables
+showLeftCross  = angleSelection == "0°"
+showLeftX      = angleSelection == "45°"
+showUpCross    = angleSelection == "90°"
+showRightX     = angleSelection == "135°"
+showRightCross = angleSelection == "180°"
+showBRightX    = angleSelection == "225°"
+showDownCross  = angleSelection == "270°"
+showBLeftX     = angleSelection == "315°"
+
+// Single color input applied to all selections
+angleColor = input.color(color.aqua, "Angle Color", group = nine)
+
+
+// Uncomment to explore Timelines
+// show_timelines = input.bool(true, "Show/Hide SQ9 Timelines", group = nine, tooltip = tooltip7)
+// show_levels = input.bool(true, "Show/Hide SQ9 Levels", group = nine)
+hide_start_line = input.bool(true, "Show/Hide startline w/ info label", group = nine)
+
+lengthGroupTitle = "Pivots Settings"
+leftLenH = input.int(title="Pivot High", defval=10, minval=1, inline="Pivot High", group=lengthGroupTitle, tooltip = tooltip5)
+rightLenH = input.int(title="/", defval=10, minval=1, inline="Pivot High", group=lengthGroupTitle, tooltip = tooltip5)
+
+
+
+leftLenL = input.int(title="Pivot Low", defval=10, minval=1, inline="Pivot Low", group=lengthGroupTitle)
+rightLenL = input.int(title="/", defval=10, minval=1, inline="Pivot Low", group=lengthGroupTitle)
+labelColorH = input(title="Pivot High Label Color", defval=color.lime, group=lengthGroupTitle)
+labelColorL = input(title="Pivot Low Label Color", defval=color.red, group=lengthGroupTitle)
+labelColorS = input(title="Equal Pivots", defval=color.orange, group=lengthGroupTitle)
+textColorL = input(title="Text Color for all Pivot Labels", defval=#000000, group=lengthGroupTitle)
+realclose = input(title="BGcolor of Close price on the SQ9", defval=color.rgb(255, 255, 255), group=lengthGroupTitle)
+hide_pivot_labels = input.bool(false, "Check the box to hide pivot labels", group = lengthGroupTitle)
+
+
+
+
+// Persistent variables
+var float _scaledcurrent_price = na
+var float __scaledcurrent_price = na
+var float price_ = na 
+var float price__ = na 
+var bool dateTimeReached = na 
+
+
+
+// Arrays to store pivot prices
+var pivotHighsArray = array.new_float()
+var pivotLowsArray = array.new_float()
+var int startbar = na 
+
+if (time == dateTime)
+    dateTimeReached := true
+    startbar := bar_index
+    price__ := selectHL == "High" ? high : low
+
+
+var bool firstPivotHSkipped = false
+var bool firstPivotLSkipped = false
+
+
+
+if dateTimeReached
+    // Pivot High and Low Calculation
+    ph = ta.pivothigh(leftLenH, rightLenH)
+    pl = ta.pivotlow(leftLenL, rightLenL)
+
+    // For Pivots High
+    if not na(ph)
+        if selectHL == "High"
+            // Skip the first high pivot, push the rest
+            if firstPivotHSkipped
+                array.push(pivotHighsArray, math.round(ph, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+            else
+                firstPivotHSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+        else
+            // If user selected "Low", we do not skip any highs
+            array.push(pivotHighsArray, math.round(ph, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+
+    // For Pivots Low
+    if not na(pl)
+        if selectHL == "Low"
+            // Skip the first low pivot, push the rest
+            if firstPivotLSkipped
+                array.push(pivotLowsArray, math.round(pl, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+            else
+                firstPivotLSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+        else
+            // If user selected "High", we do not skip any lows
+            array.push(pivotLowsArray, math.round(pl, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+
+
+
+// // ╔────────────────────────────────. ■ .──────────────────────────────────────▼
+// // ║ ⇌ • Inputs • ⇋
+// // ║┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈□┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+var string tablePosition = input.string("Top Right", "Square Position", ["Top Right", "Middle Right", "Bottom Right", "Top Left", "Middle Left", "Bottom Left"], group="So9 Dimensions")
+var float width = input.float(0, "Cell Width", group="So9 Dimensions")
+var float height = input.float(0, "Cell Height", group="So9 Dimensions")
+var int frameWidth = input.int(1, "Frame Width", group="So9 Dimensions")
+var color backgroundColor = input.color(color.new(color.black, 70), "Background Color", inline="color", group="So9 Dimensions")
+var color frameColor = input.color(color.new(color.white, 40), "Frame Color", inline="color", group="So9 Dimensions")
+var string tableTextSize = input.string(size.small, "Font Size", inline="fontcolor", group="So9 Dimensions", options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge])
+var color tableTextColor = input.color(color.new(color.white, 0), "Text Color", inline="fontcolor", group="So9 Dimensions")
+// var bool showClosestValue = input.bool(true, "Show the closest value with the actual price", group="table")
+var bool showDiagonal = input.bool(true, "Diagonals", group="diagonals", inline="diagonals")
+var color diagonalColor = input.color(color.new(#004b8d, 30), "Diagonal cross color", inline="diagonal", group="diagonals")
+var color cardinalColor = input.color(color.new(#801922, 30), "Cardinal cross color", inline="diagonal", group="diagonals")
+// var color linesColor = input.color(color.new(color.white, 40), "Diagonal Levels Color", inline="diagonal", group="diagonals")
+
+
+
+
+
+type tableCells 
+    int column
+    int row
+
+
+var string position = switch tablePosition
+    "Top Right" => position.top_right
+    "Middle Right" => position.middle_right
+    "Bottom Right" => position.bottom_right
+    "Top Left" => position.top_left
+    "Middle Left" => position.middle_left
+    => position.bottom_left
+var int size = levels * 2 + 1
+var table tab = table.new(position, size, size, backgroundColor, frameColor, frameWidth, frameColor, frameWidth)
+var tableCells[] coordinates = array.new<tableCells>()
+var float[] values = array.new_float()
+var float[] angles = array.new_float()
+var float[] diagonalValues = array.new_float()
+var int count = 1
+var int layer = 2
+var int targetBar = na
+
+
+
+
+// // ╔────────────────────────────────. ■ .──────────────────────────────────────▼
+// // ║ ⇌ • Functions • ⇋
+// // ║┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈□┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+createCell(int c, int r, float v, color bgcolor=na, count) => 
+    if show_time
+        table.cell(tab, c, r, str.tostring(v) + "\n" + str.tostring(count), width, height, tableTextColor, text_size=tableTextSize, bgcolor=bgcolor)
+    else 
+        table.cell(tab, c, r, str.tostring(v), width, height, tableTextColor, text_size=tableTextSize, bgcolor=bgcolor)
+
+isDiagonal(int c, int l) => c % l == 1  
+
+setCenterRowAndColumnBackground(table tab, int size, color bgcolor) =>
+    int center = math.floor(size / 2)
+    // Set the center column background
+    for r = 0 to size - 1
+        table.cell_set_bgcolor(tab, center, r, bgcolor)
+    // Set the center row background
+    for c = 0 to size - 1
+        table.cell_set_bgcolor(tab, c, center, bgcolor)
+
+
+
+getDiagonalColor() => showDiagonal ? diagonalColor : na
+
+createCellWithValueAndColor(int column, int row, float value, color col, count) =>
+    createCell(column, row, value, col, count)
+    pivot = tableCells.new(column, row)
+    array.push(coordinates, pivot)
+    array.push(values, value)
+
+
+// RoundDown() rounds the specified number down to the given number
+// of decimal places.
+RoundDown(number, decimals) =>
+    factor = math.pow(10, decimals)
+    math.floor(number * factor) / factor
+
+
+var line[] lines_array = array.new<line>()
+var label[] label_array = array.new<label>()
+
+clearOldLinesAndLabels() =>
+    while array.size(lines_array) > 0
+        line.delete(array.pop(lines_array))
+    while array.size(label_array) > 0
+        label.delete(array.pop(label_array))
+
+
+drawLineAndLabel(_color, count_increment, starting_price, buffer, price__) =>
+    array.clear(lines_array)
+    array.clear(label_array)
+
+    var int counter = na
+    var int counter_2 = na 
+    var float line_value = na
+    var float line_value_ = na  
+    var float line_value__ = na
+    var float line_value___ = na    
+    var bool anyShowFlagTrue = false
+    array.clear(lines_array)
+    array.clear(label_array)
+
+
+    // var int total = na 
+    // var int total = na 
+    
+    if showUpCross
+        counter := 15
+        counter_2 := 4
+        anyShowFlagTrue := true
+
+    if showDownCross
+        counter := 8
+        anyShowFlagTrue := true
+
+    if showLeftCross
+        counter := 2
+        anyShowFlagTrue := true
+
+    if showRightCross
+        counter := 6
+        anyShowFlagTrue := true
+
+    if showLeftX
+        counter := 3
+        anyShowFlagTrue := true
+
+    if showRightX
+        counter := 5
+        anyShowFlagTrue := true
+
+    if showBLeftX
+        counter := 9
+        anyShowFlagTrue := true
+
+    if showBRightX
+        counter := 7
+        anyShowFlagTrue := true
+
+
+    // plot the 4 cell number
+    ___temp = math.sqrt(counter_2)
+    total___ = int(math.round(___temp * ___temp))
+    line_value___ := (total___ * count_increment) + starting_price
+    first = line_value___
+
+
+    // plot the first cell number
+    __temp = math.sqrt(counter)
+    total_ = int(math.round(__temp * __temp))
+    line_value__ := (total_ * count_increment) + starting_price
+    first_ang_ = line_value__
+    
+
+
+
+    if count_increment > 0
+        // if show_levels
+        l1 = line.new(startbar, math.round(line_value__, rounding), last_bar_index + 30, math.round(line_value__, rounding), color = _color, force_overlay = true)
+        array.push(lines_array, l1)
+        lab1 = label.new(x=last_bar_index + 30, y=math.round(line_value__, rounding), text=str.tostring(math.round(line_value__, rounding)), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = textColorL, color = _color,  force_overlay = true)
+        array.push(label_array, lab1)
+        lab2 = label.new(x=startbar, y=math.round(line_value__, rounding), text=str.tostring(total_), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.tiny , textcolor = textColorL, color = _color,  force_overlay = true)
+        array.push(label_array, lab2)
+    
+
+    else
+        // if show_levels
+        l2 = line.new(startbar,  RoundDown(line_value__, rounding), last_bar_index + 30,  RoundDown(line_value__, rounding), color = _color,  force_overlay = true)
+        array.push(lines_array, l2)
+        lab3 = label.new(x=last_bar_index + 30, y= RoundDown(line_value__, rounding), text=str.tostring( RoundDown(line_value__, rounding)), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = textColorL, color = _color,  force_overlay = true)
+        array.push(label_array, lab3)
+        lab4 = label.new(x=startbar, y= RoundDown(line_value__, rounding), text=str.tostring(total_), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.tiny, textcolor = textColorL, color = _color,  force_overlay = true)
+        array.push(label_array, lab4)
+
+    // loop through and plot the rest of the numbers 
+    for i = 1 to levels - 1 + buffer
+        _temp = (math.sqrt(counter) + 2)
+        total = int(_temp * _temp)
+        line_value_ := (total * count_increment) + starting_price
+        // rest_angs = math.round(line_value_, rounding)
+        rest_angs = line_value_
+
+
+        
+        if count_increment > 0
+            // if show_levels
+            l3 = line.new(startbar, math.round(line_value_, rounding), last_bar_index + 30, math.round(line_value_, rounding), color = _color,  force_overlay = true)
+            array.push(lines_array, l3)
+            lab5 = label.new(x=last_bar_index + 30, y=math.round(line_value_, rounding), text=str.tostring(math.round(line_value_, rounding)), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = textColorL, color = _color,  force_overlay = true)
+            array.push(label_array, lab5)
+            lab6 = label.new(x=startbar, y=math.round(line_value_, rounding), text=str.tostring(total), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.tiny, textcolor = textColorL, color = _color,  force_overlay = true)
+            array.push(label_array, lab6)
+           // // // Uncomment for Timelines need to push to array as well 
+            // if show_timelines and (bar_index + total) <= (last_bar_index + 500)
+            //     line.new(bar_index + counter, price__ , bar_index + counter, price__, color = _color,  force_overlay = true, extend = extend.left, style = line.style_dotted)    
+            //     line.new(bar_index + total, price__ , bar_index + total, price__, color = _color,  force_overlay = true, extend = extend.left, style = line.style_dotted)    
+
+        else
+            // if show_levels
+            l4 = line.new(startbar,  RoundDown(line_value_, rounding), last_bar_index + 30,  RoundDown(line_value_, rounding), color = _color,  force_overlay = true)
+            array.push(lines_array, l4)
+            lab7 = label.new(x=last_bar_index + 30, y= RoundDown(line_value_, rounding), text=str.tostring( RoundDown(line_value_, rounding)), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = textColorL, color = _color,  force_overlay = true)
+            array.push(label_array, lab7)
+            // plot cell numbers
+            lab8 = label.new(x=startbar, y= RoundDown(line_value_, rounding), text=str.tostring(total), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.tiny, textcolor = textColorL, color = _color,  force_overlay = true)
+            array.push(label_array, lab8)
+
+            // // // Uncomment for Timelines need to push to array as well 
+            // if show_timelines and (bar_index + total) <= (last_bar_index + 500)
+            //     line.new(bar_index + counter, price__ , bar_index + counter, price__, color = _color,  force_overlay = true, extend = extend.right, style = line.style_dotted)
+            //     line.new(bar_index + total, price__ , bar_index + total, price__, color = _color,  force_overlay = true, extend = extend.right, style = line.style_dotted)
+
+        counter := total
+
+
+    if hide_start_line
+        l5 = line.new(startbar, price__, last_bar_index + 90, price__, color = tableTextColor,  force_overlay = true)
+        array.push(lines_array, l5)
+        lab9 = label.new(x=last_bar_index + 90, y=price__ , text="Start Price:" + str.tostring(price__) + " " + " | Increment:" + str.tostring(count_increment) + " | Round precision: " + str.tostring(rounding), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = color.black, color = tableTextColor,  force_overlay = true)
+        array.push(label_array, lab9)
+
+
+
+
+
+get_angle_values_plot(count_increment, starting_price, buffer, price__) =>
+    
+    var int counter = na
+    var int counter_2 = na 
+    var float line_value = na
+    var float line_value_ = na  
+    var float line_value__ = na
+    var float line_value___ = na    
+    var bool anyShowFlagTrue = false
+
+    
+    if showUpCross
+        counter := 15
+        counter_2 := 4
+        anyShowFlagTrue := true
+
+    if showDownCross
+        counter := 8
+        anyShowFlagTrue := true
+
+    if showLeftCross
+        counter := 2
+        anyShowFlagTrue := true
+
+    if showRightCross
+        counter := 6
+        anyShowFlagTrue := true
+
+    if showLeftX
+        counter := 3
+        anyShowFlagTrue := true
+
+    if showRightX
+        counter := 5
+        anyShowFlagTrue := true
+
+    if showBLeftX
+        counter := 9
+        anyShowFlagTrue := true
+
+    if showBRightX
+        counter := 7
+        anyShowFlagTrue := true
+
+
+    // plot the 4 cell number
+    ___temp = math.sqrt(counter_2)
+    total___ = int(math.round(___temp * ___temp))
+    line_value___ := (total___ * count_increment) + starting_price
+    // first = math.round(line_value___, rounding) not ploting correct with rounding 
+    first = line_value___
+    array.push(angles, first)
+
+    // add cell 4 to angles array to color background 
+    if counter_2 == 4
+        array.push(angles, first)
+
+
+    // plot the first cell number
+    __temp = math.sqrt(counter)
+    total_ = int(math.round(__temp * __temp))
+    line_value__ := (total_ * count_increment) + starting_price
+    // first_ang_ = math.round(line_value__, rounding) not plotting correctly with rounding 
+    first_ang_ = line_value__
+    array.push(angles, first_ang_)
+
+    // loop through and plot the rest of the numbers 
+    for i = 1 to levels - 1 + buffer
+        _temp = (math.sqrt(counter) + 2)
+        total = int(_temp * _temp)
+        line_value_ := (total * count_increment) + starting_price
+        // rest_angs = math.round(line_value_, rounding)
+        rest_angs = line_value_
+        array.push(angles, rest_angs)
+
+
+        counter := total
+
+ 
+    
+    for i = 0 to array.size(angles) -1
+
+        ang = array.get(angles, i)
+        pivot_high_cell = array.indexof(values, ang)
+        if pivot_high_cell >= 0
+            coord = array.get(coordinates, pivot_high_cell)
+            table.cell_set_bgcolor(tab, coord.column, coord.row, angleColor)
+            table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+// // ║┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+// // ║ ⇌ • Functions • ⇋
+// // ╚─────────────────────────────────...───────────────────────────────────────▲
+
+// // ╔────────────────────────────────. ■ .──────────────────────────────────────▼
+// // ║ ⇌ • Build Square • ⇋
+// // ║┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈□┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+
+
+if (time == dateTime)
+    price_ := selectHL == "High" ? high : low
+    // _scaledcurrent_price := scalingMode == "Multiply" ? price_ * scaleFactor : price_ / scaleFactor
+
+    int currentColumn = levels
+    int currentRow = levels
+    int doubleLevels = levels * 2
+    float startingValue = math.round(price_, rounding) + increase
+
+
+    if selectHL == "Low"
+        createCell(currentColumn, currentRow, startingValue, diagonalColor, count)
+        array.push(diagonalValues, startingValue)
+
+        for i = 1 to doubleLevels by 1
+            int sign = i % 2 == 1 ? -1 : 1
+            int limit = i == 1 ? i / 2 : i
+
+            for j = 0 to i * 2 - 1 by 1
+                startingValue := startingValue + increase
+                count := count + 1
+                layer := math.sqrt(count) == layer + 1 ? layer + 2 : layer
+                isDiagonal = isDiagonal(count, layer)
+                col = isDiagonal ? getDiagonalColor() : na
+                currentColumn := j < limit ? currentColumn + sign : currentColumn
+                currentRow := j >= limit ? currentRow + sign : currentRow
+                createCellWithValueAndColor(currentColumn, currentRow, startingValue, col, count)
+                if isDiagonal
+                    array.push(diagonalValues, startingValue)
+
+            if i == doubleLevels
+                for j = 0 to i - 1 by 1
+                    startingValue := startingValue + increase
+                    count := count + 1
+                    isDiagonal = isDiagonal(count, layer)
+                    col = isDiagonal ? getDiagonalColor() : na
+                    currentColumn := currentColumn - sign
+                    createCellWithValueAndColor(currentColumn, currentRow, startingValue, col, count)
+                    if isDiagonal
+                        array.push(diagonalValues, startingValue)
+
+
+    if selectHL == "High"
+        createCell(currentColumn, currentRow, startingValue, diagonalColor, count)
+        array.push(diagonalValues, startingValue)
+
+        for i = 1 to doubleLevels by 1
+            int sign = i % 2 == 1 ? -1 : 1
+            int limit = i == 1 ? i / 2 : i
+
+            for j = 0 to i * 2 - 1 by 1
+                startingValue := startingValue + increase
+                if startingValue < 0  // Prevent negative values for "High"
+                    break
+                count := count + 1
+                layer := math.sqrt(count) == layer + 1 ? layer + 2 : layer
+                isDiagonal = isDiagonal(count, layer)
+                col = isDiagonal ? getDiagonalColor() : na
+                currentColumn := j < limit ? currentColumn + sign : currentColumn
+                currentRow := j >= limit ? currentRow + sign : currentRow
+                createCellWithValueAndColor(currentColumn, currentRow, startingValue, col, count)
+                if isDiagonal
+                    array.push(diagonalValues, startingValue)
+
+            if i == doubleLevels
+                for j = 0 to i - 1 by 1
+                    startingValue := startingValue + increase
+                    if startingValue < 0  // Prevent negative values for "High"
+                        break
+                    count := count + 1
+                    isDiagonal = isDiagonal(count, layer)
+                    col = isDiagonal ? getDiagonalColor() : na
+                    currentColumn := currentColumn - sign
+                    createCellWithValueAndColor(currentColumn, currentRow, startingValue, col, count)
+                    if isDiagonal
+                        array.push(diagonalValues, startingValue)
+
+
+// // // // ╔────────────────────────────────. ■ .──────────────────────────────────────▼
+// // // // ║ ⇌ • Update • ⇋
+// // // // ║┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈□┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+if (time == dateTime)
+
+    __scaledcurrent_price := math.round(price__, rounding)
+    setCenterRowAndColumnBackground(tab, size, cardinalColor)    
+
+    if showLeftX
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+    if showLeftCross
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+    if showUpCross
+        get_angle_values_plot(increase, __scaledcurrent_price, -1, price__)
+
+
+
+    if showRightCross
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+    if showDownCross
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+    if showRightX
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+    if showBRightX
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+    if showBLeftX
+        get_angle_values_plot(increase, __scaledcurrent_price, 0, price__)
+
+
+
+if dateTimeReached
+    if selectHL == "High" and increase < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+
+    // Process High Pivots
+    if array.size(pivotHighsArray) > 0
+        for i = 0 to array.size(pivotHighsArray) - 1
+            pivotHigh = array.get(pivotHighsArray, i)
+            scaled_piv = pivotHigh
+            
+            pivot_high_cell = array.binary_search_rightmost(values, scaled_piv)
+
+            // Ensure pivot_high_cell is a valid index before accessing 'coordinates'
+            if pivot_high_cell >= 1 and pivot_high_cell < array.size(coordinates)
+                coord = array.get(coordinates, pivot_high_cell)
+                
+                // Check if the pivot high is in the low array
+                if array.includes(pivotLowsArray, pivotHigh)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorH)
+                
+                table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+    // Process Low Pivots
+    if array.size(pivotLowsArray) > 0
+        for i = 0 to array.size(pivotLowsArray) - 1
+            pivotLow = array.get(pivotLowsArray, i)
+            scaled_piv_2 = pivotLow
+            pivot_low_cell = array.binary_search_rightmost(values, scaled_piv_2)
+
+            if pivot_low_cell >= 1 and pivot_low_cell < array.size(coordinates) 
+                coord = array.get(coordinates, pivot_low_cell)
+                
+                // Check if the pivot low is also in the pivot high array
+                if array.includes(pivotHighsArray, pivotLow)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorL)
+                
+                table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+
+if barstate.islast
+    
+    clearOldLinesAndLabels() // remove old lines and labels 
+
+    __scaledcurrent_price := math.round(price__, rounding)
+    // setCenterRowAndColumnBackground(tab, size, cardinalColor)
+
+
+    if showLeftX
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+    if showLeftCross
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if showUpCross
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, -1, price__)
+
+
+
+    if showRightCross
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if showDownCross
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if showRightX
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if showBRightX
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if showBLeftX
+        drawLineAndLabel(angleColor, increase, __scaledcurrent_price, 0, price__)
+
+
+    if selectHL == "High" and increase < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+
+    index = array.binary_search_leftmost(values, close)
+    if index > 0 and not barstate.isconfirmed
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(tab, coord.column, coord.row, realclose)
+        table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+if barstate.isrealtime or barstate.islast
+
+    price = close
+    if selectHL == "High" and increase < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+    
+    // array.reverse(values)
+
+    // array.sort(values, order.descending)
+
+    // index = array.binary_search_leftmost(values, close)
+    index = array.indexof(values, price)
+    if index > 0 and not barstate.isconfirmed
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(tab, coord.column, coord.row, realclose)
+        table.cell_set_text_color(tab, coord.column, coord.row, textColorL)

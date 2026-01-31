@@ -1,0 +1,666 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • MIKULA'S MASTER 360 DEGREES SQUARE OF 12
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Maps planetary positions to Mikula's 360° Square of 12
+//               price table with pivot tracking and natural resistance
+//               levels. Based on financial astrology principles.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0 - Non-Commercial, Share-Alike
+//
+// @theory       Uses VSOP87, ELP2000-82, and Meeus algorithms via
+//               Blueprint Research ephemeris libraries for accurate
+//               planetary longitude calculations.
+//
+// @features     • 12x24 price grid (360° / 15° per row)
+//               • Transit and natal planet overlays
+//               • Pivot high/low detection and highlighting
+//               • A-Line and B-Line natural resistance levels
+//               • Retrograde indicator
+//               • Geocentric and heliocentric modes
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025-2026 BlueprintResearch / Javonnii
+//   Licensed under Creative Commons BY-NC-SA 4.0
+// ════════════════════════════════════════════════════════════════
+
+
+//@version=6
+indicator("Mikula's Master 360 Degrees Square of 12", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LIBRARY IMPORT
+// ══════════════════════════════════════════════════════════════════════════════
+import BlueprintResearch/lib_ephemeris/1 as eph
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUT GROUPS
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Groups
+var string G_ANCHOR = "📍 Start Anchor"
+var string G_SQUARE = "⬜ Square Settings"
+
+// ── Start Anchor (prompts on load)
+dateTime = input.time(0, "Anchor date/time", confirm=true, group=G_ANCHOR, inline="anch", tooltip="Pick the bar timestamp that seeds the square.")
+selectHL = input.string("Low", "Price source", options=["High","Low"], group=G_ANCHOR, inline="anch", tooltip="Use the bar's High or Low at the anchor time.")
+use_custom_price = input.bool(false, "Manual", group=G_ANCHOR, inline="man")
+start_square     = input.float(0.0, "Start price", group=G_ANCHOR, inline="man", tooltip="Override anchor price with custom value.")
+
+// ── Square Settings
+square_num = input.int(1, "Iterate Square", minval=1, group=G_SQUARE, inline="sq", tooltip="How many square iterations to build.")
+increment_ = input.float(15.0, "Price per cell", group=G_SQUARE, inline="sq", tooltip="Price step between cells. Positive or negative.")
+time_increment = input.int(1, "Time increment", minval=1, group=G_SQUARE, inline="time", tooltip="Increment for count number under each price.")
+show_time       = input.bool(true, "Show time", group=G_SQUARE, inline="time")
+rounding        = input.int(0, "Rounding", group=G_SQUARE, tooltip="Decimal places for table values. 0 keeps instrument precision.")
+
+
+// Group titles
+var string G_TRANS  = "⏱ Transit Time"
+var string G_NATAL  = "🕜 Natal (First Trade) Time Machine"
+var string G_PLANET = "🪐 Planets & Natural Levels"
+var string G_PIVOT  = "Swing Pivots"
+var string G_APPEAR = "📋 Table & Text"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TIME CONTROLS
+// ══════════════════════════════════════════════════════════════════════════════
+// Transit time override
+use_transit_override  = input.bool(false, "Override transit time", group=G_TRANS, inline="tt", tooltip="Enable to test a specific transit timestamp.")
+transit_override_input = input.time(timestamp("2009-04-20T00:00:00"), "Transit date/time", confirm=false, group=G_TRANS, inline="tt", tooltip="Used only when override is enabled.")
+transit_time   = use_transit_override ? transit_override_input : time
+
+// 1) Natal (first trade) time machine
+use_time_machine  = input.bool(true, "Activate Time Machine", group=G_NATAL, inline="nt", tooltip="Use a fixed first-trade (natal) date/time.")
+natal_time_input = input.time(timestamp("2009-04-20T00:00:00"), "Select natal date/time", group=G_NATAL, inline="nt")
+natal_time   = use_time_machine ? natal_time_input : time
+geo  = input.bool(true, "Geocentric", group=G_NATAL, tooltip="On = geocentric, Off = heliocentric. Note: For 24/7 planetary updates, apply this indicator to a crypto chart like BTCUSD.")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLANET & LEVEL SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+planet1_in = input.string("☉︎ Sun", "Transit planet", options=["☉︎ Sun","☽︎ Moon","☿ Mercury","♀ Venus","🜨 Earth","♂ Mars","♃ Jupiter","♄ Saturn","⛢ Uranus","♆ Neptune","♇ Pluto"], group=G_PLANET, inline="p")
+planet2_in = input.string("☉︎ Sun", "Natal planet",   options=["☉︎ Sun","☽︎ Moon","☿ Mercury","♀ Venus","🜨 Earth","♂ Mars","♃ Jupiter","♄ Saturn","⛢ Uranus","♆ Neptune","♇ Pluto"], group=G_PLANET, inline="p")
+
+show_transit_angle = input.bool(false, "Plot transit levels", group=G_PLANET, inline="ang")
+show_natal_angle   = input.bool(false, "Plot natal levels",   group=G_PLANET, inline="ang")
+ShowALine          = input.bool(false, "A Line Levels",               group=G_PLANET, inline="nat")
+ShowBLine          = input.bool(false, "B Line Levels",               group=G_PLANET, inline="nat")
+iTxtSize_ = input.string("Small", title="Text size", options=["Auto","Tiny","Small","Normal","Large"], group=G_PLANET, inline="sz", tooltip="Controls Planet/Levels label size.")
+vTxtSize_ = iTxtSize_ == "Auto" ? size.auto : iTxtSize_ == "Tiny" ? size.tiny : iTxtSize_ == "Small" ? size.small : iTxtSize_ == "Normal" ? size.normal : iTxtSize_ == "Large" ? size.large : size.small
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIVOT SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+pivotLenH = input.int(10, title="Pivot High", minval=1, group=G_PIVOT, inline="piv", tooltip="Bars left/right to confirm a pivot high.")
+pivotLenL = input.int(10, title="Pivot Low",  minval=1, group=G_PIVOT, inline="piv", tooltip="Bars left/right to confirm a pivot low.")
+
+labelColorH = input.color(color.lime,    "High label",     group=G_PIVOT, inline="lbl")
+labelColorL = input.color(color.red,     "Low label",      group=G_PIVOT, inline="lbl")
+labelColorS = input.color(color.orange,  "Equal pivots",   group=G_PIVOT, inline="lbl")
+textColorL  = input.color(#000000,       "Label text and Realtime text cell",     group=G_PIVOT, inline="txt")
+hide_pivot_labels = input.bool(false, "Hide pivot labels", group=G_PIVOT)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TABLE APPEARANCE
+// ══════════════════════════════════════════════════════════════════════════════
+iTxtSize = input.string("Small", title="Text size", options=["Auto","Tiny","Small","Normal","Large"], group=G_APPEAR, inline="sz", tooltip="Controls label/table text size.")
+vTxtSize = iTxtSize == "Auto" ? size.auto : iTxtSize == "Tiny" ? size.tiny : iTxtSize == "Small" ? size.small : iTxtSize == "Normal" ? size.normal : iTxtSize == "Large" ? size.large : size.small
+
+bg_col      = input.color(color.black,               "Background",        group=G_APPEAR, inline="bg",   tooltip="Overall table background.")
+price_col   = input.color(color.new(color.aqua, 90), "Price background",  group=G_APPEAR, inline="bg",   tooltip="Cell background for price.")
+txt_col     = input.color(color.white,               "Text (primary)",    group=G_APPEAR, inline="txt",  tooltip="Primary table/label text color.")
+txt_col1    = input.color(#ff0000,                   "A|B Levels Text and Lines color",     group=G_APPEAR, inline="txt")
+close_col   = input.color(color.white,               "Realtime Close price cell color",     group=G_APPEAR)
+
+
+col1_out = planet1_in == "☉︎ Sun" ? #fef201 : planet1_in == "☽︎ Moon" ? #ffffffaa : planet1_in == "☿ Mercury" ? #df8908 : planet1_in == "♀ Venus" ? #07c20d : planet1_in == "🜨 Earth" ? #00c8ff : planet1_in == "♂ Mars" ? #ff0000 : planet1_in == "♃ Jupiter" ? #a900c0dd : planet1_in == "♄ Saturn" ? color.gray : planet1_in == "⛢ Uranus" ? color.new(color.blue, 0) : planet1_in == "♆ Neptune" ? #5a5c5cb3 : planet1_in == "♇ Pluto" ? color.new(color.maroon,0) : na
+col2_out = planet2_in == "☉︎ Sun" ? #fef201 : planet2_in == "☽︎ Moon" ? #ffffffaa : planet2_in == "☿ Mercury" ? #df8908 : planet2_in == "♀ Venus" ? #07c20d : planet2_in == "🜨 Earth" ? #00c8ff : planet2_in == "♂ Mars" ? #ff0000 : planet2_in == "♃ Jupiter" ? #a900c0dd : planet2_in == "♄ Saturn" ? color.gray : planet2_in == "⛢ Uranus" ? color.new(color.blue, 0) : planet2_in == "♆ Neptune" ? #5a5c5cb3 : planet2_in == "♇ Pluto" ? color.new(color.maroon,0) : na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATE VARIABLES
+// ══════════════════════════════════════════════════════════════════════════════
+type tableCells
+    int column
+    int row
+
+// Table and arrays for pivot tracking 
+var square_chart = table.new(position.bottom_right, columns=16, rows=25, border_width=1, frame_width = 0)
+var float[] values = array.new_float()
+var tableCells[] coordinates = array.new<tableCells>()
+int natal_planet_row = na
+var int prev_transit_row = na   // Track previous transit planet row (column 2)
+var int prev_natal_row = na     // Track previous natal planet row (column 3)
+var array<tableCells> prev_natal_angle_cells = array.new<tableCells>()    // Track highlighted natal angle cells
+var array<tableCells> prev_transit_angle_cells = array.new<tableCells>()  // Track highlighted transit angle cells
+var tableCells prev_price_cell = na  // Track price highlight cell for cleanup
+var bool dateTimeReached = false
+var pivotHighsArray = array.new_float()
+var pivotLowsArray = array.new_float()
+var float _scaledcurrent_price = na
+var float __scaledcurrent_price = na
+var float price_ = na 
+var float price__ = na
+var a_line = array.new_float()
+var b_line = array.new_float()
+
+// Get first and last value of the Square of 12 this will help plot levels iteratively.
+var float first_val = na
+var float first_val2 = na
+var float last_val = na
+var start_plot_from = bar_index
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+scale_price_for_table(price) =>
+    result = int(price / increment_)
+    sum = result * increment_
+    sum
+
+if (time == dateTime)
+    dateTimeReached := true
+    price_ := use_custom_price ? start_square : (selectHL == "High" ? high : low)
+    start_plot_from := bar_index
+
+
+var bool firstPivotHSkipped = false
+var bool firstPivotLSkipped = false
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIVOT DETECTION
+// ══════════════════════════════════════════════════════════════════════════════
+if dateTimeReached
+    // Pivot High and Low Calculation
+    ph = ta.pivothigh(pivotLenH, pivotLenH)
+    pl = ta.pivotlow(pivotLenL, pivotLenL)
+
+    // For Pivots High
+    if not na(ph)
+        if selectHL == "High"
+            // Skip the first high pivot, push the rest
+            if firstPivotHSkipped
+                array.push(pivotHighsArray, math.round(ph, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[pivotLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+            else
+                firstPivotHSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[pivotLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+        else
+            // If user selected "Low", we do not skip any highs
+            array.push(pivotHighsArray, math.round(ph, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[pivotLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+
+    // For Pivots Low
+    if not na(pl)
+        if selectHL == "Low"
+            // Skip the first low pivot, push the rest
+            if firstPivotLSkipped
+                array.push(pivotLowsArray, math.round(pl, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[pivotLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+            else
+                firstPivotLSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[pivotLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+        else
+            // If user selected "High", we do not skip any lows
+            array.push(pivotLowsArray, math.round(pl, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[pivotLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+
+drawLabel(_offset, _pivot, _style, _color, _textColor) =>
+    if not na(_pivot)
+        label.new(bar_index[_offset], _pivot, str.tostring(_pivot, format.mintick), style=_style, color=_color, textcolor=_textColor)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLANET HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+// Helper function to format degrees to zodiac sign (e.g., "15° Aries")
+degsignf(deg) =>
+    signs = array.from("Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+                       "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces")
+    normalized = deg % 360
+    sign_idx = int(normalized / 30)
+    deg_in_sign = normalized % 30
+    str.tostring(math.round(deg_in_sign)) + "° " + array.get(signs, sign_idx)
+
+// Function to get planet longitude using Blueprint Research ephemeris library
+f_get_planet_longitude(planet_str, timestamp, use_geo) =>
+    planet_enum = eph.string_to_planet(planet_str)
+    eph.get_longitude(planet_enum, timestamp, use_geo)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SQUARE BUILDING
+// ══════════════════════════════════════════════════════════════════════════════
+// Function to fill a square (12 columns) starting from a given value
+f_fill_square(start_col, start_val, increment, count, time_incr) =>
+    val = start_val
+    count_ = count
+    for col = start_col to start_col + 11
+        for row = 0 to 23
+            cell_row = 23 - row
+
+            cellText = show_time ? str.tostring(val) + "\n" + str.tostring(count_) : str.tostring(val)
+            table.cell(square_chart, column=col, row=23 - row, text=cellText, bgcolor=price_col, text_color=txt_col, text_size=vTxtSize)
+            pivot = tableCells.new(col, cell_row)
+            array.push(values, val)
+            array.push(coordinates, pivot)
+
+            val += increment
+            count_ += time_incr
+
+    for col = start_col to start_col + 11
+        table.cell(square_chart, column=col, row=24, text=str.tostring(col - start_col + 1) + " 🔄", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+
+    val  // Return the last value used
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RETROGRADE DETECTION
+// ══════════════════════════════════════════════════════════════════════════════
+get_retro_status(planet_str, timestamp) =>
+    // Sun and Moon never retrograde
+    if planet_str == "☉︎ Sun" or planet_str == "☽︎ Moon"
+        ""
+    else
+        planet_enum = eph.string_to_planet(planet_str)
+        eph.is_retrograde(planet_enum, timestamp) ? " ℞" : ""
+
+var float planet_long = 0.0
+var float natal_planet_long = 0.0
+
+if (time >= dateTime)
+    planet_long := f_get_planet_longitude(planet1_in, transit_time, geo)
+    natal_planet_long := f_get_planet_longitude(planet2_in, natal_time, geo)
+
+retro_status = get_retro_status(planet1_in, transit_time)
+natal_retro_status = get_retro_status(planet2_in, natal_time)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLUMN RENDERING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Clear a planet cell by resetting to transparent (no background highlight)
+f_clear_planet_cell(int column, int row) =>
+    if not na(row) and row >= 0 and row <= 23
+        table.cell(square_chart, column=column, row=row, text="", bgcolor=color.new(color.black, 100), text_color=txt_col, text_size=vTxtSize)
+
+f_fill_column2(planetary_longitude) =>
+    planet1_in_ = str.tostring(planet1_in)
+    var int cyc = na
+    // Determine the row based on the planetary longitude
+    row = 24 - int(math.round(planetary_longitude) / 15)
+    // Ensure the row is within bounds
+    if row >= 0 and row <= 23
+        table.cell(square_chart, column=2, row=row, text=str.tostring(planet1_in_) + retro_status, bgcolor=col1_out, text_color=#000000, text_size=vTxtSize, tooltip = str.tostring(math.round(planetary_longitude))+ "°" + " | " +degsignf(planetary_longitude))
+        cyc := row
+
+    if row == 24
+        table.cell(square_chart, column=2, row=0, text=str.tostring(planet1_in_) + retro_status, bgcolor=col1_out, text_color=#000000, text_size=vTxtSize, tooltip = str.tostring(math.round(planetary_longitude))+ "°" + " | " + degsignf(planetary_longitude))
+        cyc := 0
+
+    cyc
+
+get_planet_row_only(planetary_longitude) =>
+    planet1_in_ = str.tostring(planet1_in)
+    var int cyc = na
+    // Determine the row based on the planetary longitude
+    row = 24 - int(math.round(planetary_longitude) / 15)
+    // Ensure the row is within bounds
+    if row >= 0 and row <= 23
+        cyc := row
+
+    if row == 24
+        cyc := 0
+
+    cyc
+
+f_fill_column3(planetary_longitude) =>
+    planet2_in_ = str.tostring(planet2_in)
+    var int cyc = na
+    // Determine the row based on the planetary longitude
+    row = 24 - int(math.round(planetary_longitude) / 15)
+    // Ensure the row is within bounds
+    if row >= 0 and row <= 23
+        table.cell(square_chart, column=3, row=row, text=str.tostring(planet2_in_) + natal_retro_status, bgcolor=col2_out, text_color=#000000, text_size=vTxtSize, tooltip = str.tostring(math.round(planetary_longitude))+ "°" + " | " + degsignf(planetary_longitude))
+        cyc := row
+
+    if row == 24
+        table.cell(square_chart, column=3, row=0, text=str.tostring(planet2_in_) + natal_retro_status, bgcolor=col2_out, text_color=#000000, text_size=vTxtSize, tooltip = str.tostring(math.round(planetary_longitude))+ "°" + " |  " + degsignf(planetary_longitude))
+        cyc := 0
+
+    cyc
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NATURAL RESISTANCE LEVELS
+// ══════════════════════════════════════════════════════════════════════════════
+// Function to get natural resistance levels and push to a parent array
+get_natural_res_levels(min_val, max_val, base ,line_) =>
+    // Start value for counterA
+    float counterA = min_val
+    // Condition to check line type and populate array
+    if line_ == "A"
+        for i = 0 to 11
+            if i == 0
+                array.push(a_line, min_val)
+            else
+                sum = (counterA + base) + (increment_ * 2)
+                array.push(a_line, sum)
+                counterA := sum 
+
+    if line_ == "B"
+        for i = 0 to 11
+            if i == 0
+                sum = (increment_ * 22) + min_val
+                counterA := sum
+                array.push(b_line, sum)
+            else
+                sum = (counterA + base) - (increment_ * 2)
+                array.push(b_line, sum)
+                counterA := sum
+    counterA
+
+get_base_value(increment_) =>
+    base_value = (increment_ * 24) * 12
+    base_value
+
+total_per_cycle = increment_ * 24
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLANETARY LINE CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+get_planetary_line_value(min_val, planet_row, planet_long, cycle) =>
+    var float row_value = na
+    if planet_row == 23 and cycle == 0
+        row_value := min_val
+    else
+        row_value := min_val + (increment_ * (23 - planet_row)) + (cycle * total_per_cycle)
+    row_value
+
+var float planet_row_ = na
+planet_row = get_planet_row_only(natal_planet_long)
+planet_row_ := get_planet_row_only(planet_long)
+
+var line[] lines_array = array.new<line>()
+var label[] label_array = array.new<label>()
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN RENDERING LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+if barstate.islast or barstate.isrealtime
+    // Delete prior bar's lines and labels
+    for l in lines_array
+        line.delete(l)
+    array.clear(lines_array)
+
+    for lbl in label_array
+        label.delete(lbl)
+    array.clear(label_array)
+
+    var int incre_one = 1
+    var int boolean_flag = na
+    int count = time_increment
+
+    // Column 0: Zodiac Signs in the specified order
+    table.cell(square_chart, column=0, row=0, text="Aries ♈", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=2, text="Pisces ♓", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=4, text="Aquarius ♒", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=6, text="Capricorn ♑", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=8, text="Sagittarius ♐", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=10, text="Scorpio ♏", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=12, text="Libra ♎", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=14, text="Virgo ♍", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=16, text="Leo ♌", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=18, text="Cancer ♋", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=20, text="Gemini ♊", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=0, row=22, text="Taurus ♉", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+
+    // Column 1: Degrees
+    table.cell(square_chart, column=1, row=0, text="360° - 0°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=1, text="345°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=2, text="330°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=3, text="315° = 7/8", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=4, text="300°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=5, text="285°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=6, text="270° = 3/4", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=7, text="255°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=8, text="240° = 2/3", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=9, text="225°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=10, text="210°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=11, text="195°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=12, text="180° = 1/2", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=13, text="165°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=14, text="150°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=15, text="135°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=16, text="120° = 1/3", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=17, text="105°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=18, text="90° = 1/4", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=19, text="75°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=20, text="60°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=21, text="45°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=22, text="30°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=23, text="15°", bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=1, row=24, text= str.tostring(square_num) + " ⬜" , bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+
+    table.cell(square_chart, column=2, row=24, text= "Transits" , bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+    table.cell(square_chart, column=3, row=24, text= "Natal" , bgcolor=bg_col, text_color=txt_col, text_size=vTxtSize)
+
+    base = get_base_value(increment_)
+
+    for cycle = 0 to square_num - 1 
+        if cycle == square_num - 1
+            start_val = (cycle * base) + math.round(price_, rounding) + increment_
+            first_val := start_val
+            start_col = 4
+            last_val := f_fill_square(start_col, start_val, increment_, count, time_increment)
+        count += 288 * time_increment
+
+    // ═══ CLEAR PRICE LEVEL ARRAYS (prevent stacking) ═══
+    array.clear(a_line)
+    array.clear(b_line)
+
+    get_natural_res_levels(first_val, last_val, total_per_cycle, line_ = "A")
+    get_natural_res_levels(first_val, last_val, total_per_cycle, line_ = "B")
+
+
+    if ShowALine 
+        for i = 0 to array.size(a_line) - 1
+            price_line = array.get(a_line, i)
+            line_1 = line.new(x1= start_plot_from, y1=price_line, x2= start_plot_from + 288, y2= price_line, color = txt_col1)
+            lab_1  = label.new(x= start_plot_from + 288, y= price_line, style = label.style_label_left, size = vTxtSize_, text = str.tostring(price_line), color = color.new(color.red, 100), textcolor = txt_col1)
+            lab_2  = label.new(x= start_plot_from, y= price_line, style = label.style_label_right, size = vTxtSize_, text = "A", color = color.new(color.red, 100), textcolor = txt_col1) 
+
+            array.push(lines_array, line_1)
+            array.push(label_array, lab_1)
+            array.push(label_array, lab_2)
+
+    for i = 0 to array.size(b_line) - 1
+        price_line = array.get(b_line, i)
+        if ShowBLine
+
+            line_2 = line.new(x1= start_plot_from, y1=price_line, x2= start_plot_from + 288, y2= price_line, color = txt_col1)
+            lab_3  = label.new(x= start_plot_from + 288, y= price_line, style = label.style_label_left, size = vTxtSize_, text = str.tostring(price_line), color = color.new(color.red, 100),  textcolor = txt_col1)
+            lab_4  = label.new(x= start_plot_from, y= price_line, style = label.style_label_right, size = vTxtSize_, text = "B", color = color.new(color.red, 100), textcolor = txt_col1)
+            array.push(lines_array, line_2)
+            array.push(label_array, lab_3)
+            array.push(label_array, lab_4)
+
+    float degree_level = 0.0
+    float degree_level_ = 0.0
+    int idx = na
+    int idx2 = na
+    line natal_line = na
+    line transit_line = na
+    label natal_lab = na
+    label transit_lab = na
+    planet1_in_ = str.substring(planet1_in, 0, 1)
+    planet2_in_ = str.substring(planet2_in, 0, 1)
+
+    // Clear previous angle cell highlights before drawing new ones (reset to price grid color)
+    for cell in prev_natal_angle_cells
+        table.cell_set_bgcolor(square_chart, cell.column, cell.row, price_col)
+        table.cell_set_text_color(square_chart, cell.column, cell.row, txt_col)
+    array.clear(prev_natal_angle_cells)
+
+    for cell in prev_transit_angle_cells
+        table.cell_set_bgcolor(square_chart, cell.column, cell.row, price_col)
+        table.cell_set_text_color(square_chart, cell.column, cell.row, txt_col)
+    array.clear(prev_transit_angle_cells)
+
+    // Restore A/B diagonal red text color (must run AFTER angle cleanup to override white text)
+    if array.size(a_line) > 0 and array.size(b_line) > 0
+        for i = 0 to array.size(a_line) - 1
+            plot_a = array.get(a_line, i)
+            plot_b = array.get(b_line, i)
+
+            plot_a_cells = array.indexof(values, plot_a)
+            plot_b_cells = array.indexof(values, plot_b)
+            if plot_a_cells >=0 and plot_b_cells >=0
+                coord_a = array.get(coordinates, plot_a_cells)
+                coord_b = array.get(coordinates, plot_b_cells)
+                table.cell_set_text_color(square_chart, coord_a.column, coord_a.row, text_color = txt_col1)
+                table.cell_set_text_color(square_chart, coord_b.column, coord_b.row, text_color = txt_col1)
+
+    for i = 0 to 11
+        degree_level := get_planetary_line_value(first_val, planet_row, natal_planet_long, i)
+        degree_level_ := get_planetary_line_value(first_val, planet_row_, planet_long, i)
+
+        idx := array.indexof(values, degree_level)
+        idx2 := array.indexof(values, degree_level_)
+
+        if show_natal_angle
+            coord = array.get(coordinates, idx)
+            table.cell_set_bgcolor(square_chart, coord.column, coord.row, col2_out)
+            table.cell_set_text_color(square_chart, coord.column, coord.row, #000000)
+            array.push(prev_natal_angle_cells, coord)  // Track for cleanup
+
+            natal_line := line.new(x1= bar_index - 24, y1=degree_level, x2= last_bar_index + 24, y2= degree_level, color = col2_out)
+            array.push(lines_array, natal_line)
+
+            natal_lab := label.new(x= bar_index - 24, y= degree_level, style = label.style_label_right, size = vTxtSize_, text = planet2_in_, color = color.new(col2_out, 100), textcolor = col2_out)
+            array.push(label_array, natal_lab)
+            natal_lab := label.new(x= last_bar_index + 24, y= degree_level, style = label.style_label_left, size = vTxtSize_, text = str.tostring(degree_level), color = color.new(col2_out, 100), textcolor = col2_out)
+            array.push(label_array, natal_lab)
+
+
+        if show_transit_angle
+            coord = array.get(coordinates, idx2)
+            table.cell_set_bgcolor(square_chart, coord.column, coord.row, col1_out)
+            table.cell_set_text_color(square_chart, coord.column, coord.row, #000000)
+            array.push(prev_transit_angle_cells, coord)  // Track for cleanup
+
+            transit_line := line.new(x1= bar_index - 24, y1=degree_level_, x2= last_bar_index + 24, y2= degree_level_, color = col1_out)
+            array.push(lines_array, transit_line)
+
+            transit_lab := label.new(x= bar_index - 24, y= degree_level_, style = label.style_label_right, size = vTxtSize_, text = planet1_in_, color = color.new(col1_out, 100), textcolor = col1_out)
+            array.push(label_array, transit_lab)
+            transit_lab := label.new(x= last_bar_index + 24, y= degree_level_, style = label.style_label_left, size = vTxtSize_, text = str.tostring(degree_level_), color = color.new(col1_out, 100), textcolor = col1_out)
+            array.push(label_array, transit_lab)
+
+if barstate.isrealtime or barstate.islast
+    result = int(close / increment_)
+    sum = result * increment_
+    index = array.indexof(values, sum)
+    if index > 0 and sum >= first_val
+        coord = array.get(coordinates, index)
+        // Clear previous price highlight if it moved to a different cell
+        if not na(prev_price_cell) and (prev_price_cell.column != coord.column or prev_price_cell.row != coord.row)
+            table.cell_set_bgcolor(square_chart, prev_price_cell.column, prev_price_cell.row, price_col)
+            table.cell_set_text_color(square_chart, prev_price_cell.column, prev_price_cell.row, txt_col)
+        table.cell_set_bgcolor(square_chart, coord.column, coord.row, color.white)
+        table.cell_set_text_color(square_chart, coord.column, coord.row, #000000)
+        prev_price_cell := coord  // Track for cleanup
+    // Calculate new rows
+    new_transit_row = get_planet_row_only(planet_long)
+    new_natal_row = get_planet_row_only(natal_planet_long)
+
+    // Clear old cells if row changed
+    if not na(prev_transit_row) and prev_transit_row != new_transit_row
+        f_clear_planet_cell(2, prev_transit_row)
+    if not na(prev_natal_row) and prev_natal_row != new_natal_row
+        f_clear_planet_cell(3, prev_natal_row)
+
+    // Fill new cells
+    planet_row := f_fill_column2(planet_long)
+    natal_planet_row := f_fill_column3(natal_planet_long)
+
+    // Update tracking
+    prev_transit_row := new_transit_row
+    prev_natal_row := new_natal_row
+
+base_ = get_base_value(increment_)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIVOT HIGHLIGHTING
+// ══════════════════════════════════════════════════════════════════════════════
+if dateTimeReached
+    if selectHL == "High" and increment_ < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+
+    // Process High Pivots
+    if array.size(pivotHighsArray) > 0
+        for i = 0 to array.size(pivotHighsArray) - 1
+            pivotHigh = array.get(pivotHighsArray, i)
+            scaled_piv = pivotHigh
+            
+            pivot_high_cell = array.binary_search_rightmost(values, scaled_piv)
+
+            // Ensure pivot_high_cell is a valid index before accessing 'coordinates'
+            if pivot_high_cell >= 1 and pivot_high_cell < array.size(coordinates)
+                coord = array.get(coordinates, pivot_high_cell)
+                
+                // Check if the pivot high is in the low array
+                if array.includes(pivotLowsArray, pivotHigh)
+                    table.cell_set_bgcolor(square_chart, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(square_chart, coord.column, coord.row, labelColorH)
+                
+                table.cell_set_text_color(square_chart, coord.column, coord.row, textColorL)
+
+    // Process Low Pivots
+    if array.size(pivotLowsArray) > 0
+        for i = 0 to array.size(pivotLowsArray) - 1
+            pivotLow = array.get(pivotLowsArray, i)
+            scaled_piv_2 = pivotLow
+            pivot_low_cell = array.binary_search_rightmost(values, scaled_piv_2)
+
+            if pivot_low_cell >= 1 and pivot_low_cell < array.size(coordinates) 
+                coord = array.get(coordinates, pivot_low_cell)
+                
+                // Check if the pivot low is also in the pivot high array
+                if array.includes(pivotHighsArray, pivotLow)
+                    table.cell_set_bgcolor(square_chart, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(square_chart, coord.column, coord.row, labelColorL)
+                
+                table.cell_set_text_color(square_chart, coord.column, coord.row, textColorL)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REALTIME CLOSE HIGHLIGHTING
+// ══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    index = array.binary_search_leftmost(values, close)
+    if index > 0
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(square_chart, coord.column, coord.row, close_col)
+        table.cell_set_text_color(square_chart, coord.column, coord.row, textColorL)
+
+if barstate.isrealtime or barstate.islast
+    price = close
+    index = array.indexof(values, price)
+    if index > 0
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(square_chart, coord.column, coord.row, close_col)
+        table.cell_set_text_color(square_chart, coord.column, coord.row, textColorL)

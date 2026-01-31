@@ -1,0 +1,620 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • PLANETARY RETROGRADE DASHBOARD
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Multi-planet retrograde dashboard showing up to 8 planets
+//               simultaneously with future projections and distribution histogram.
+//               Uses fill() for historical data (unlimited) and boxes for future only.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0 (Non-Commercial, Share-Alike)
+// @version      4.0 (January 2026)
+//
+// @features     • 8-planet retrograde tracking (individually toggleable)
+//               • Fill-based historical visualization (no box limit)
+//               • Box-based future projections
+//               • Distribution of Retrograde histogram
+//               • Future projection polyline for distribution
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2026 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0
+// ════════════════════════════════════════════════════════════════
+//
+
+
+//@version=6
+indicator("Planetary Retrograde Dashboard", max_lines_count=500, max_labels_count=500, max_boxes_count=500, overlay=false)
+
+// ═══════════════════════════════════════════════════════════════════
+// Library Imports
+// ═══════════════════════════════════════════════════════════════════
+import BlueprintResearch/lib_ephemeris/1 as eph
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Planets (inline enable + color)
+// ═══════════════════════════════════════════════════════════════════
+group_planets = "Planets"
+
+show_mercury = input.bool(true, "☿ Mercury", inline="mer", group=group_planets)
+mercury_color = input.color(color.rgb(255, 165, 0), "", inline="mer", group=group_planets)
+
+show_venus = input.bool(true, "♀ Venus", inline="ven", group=group_planets)
+venus_color = input.color(color.rgb(50, 205, 50), "", inline="ven", group=group_planets)
+
+show_mars = input.bool(true, "♂ Mars", inline="mar", group=group_planets)
+mars_color = input.color(color.rgb(220, 20, 60), "", inline="mar", group=group_planets)
+
+show_jupiter = input.bool(true, "♃ Jupiter", inline="jup", group=group_planets)
+jupiter_color = input.color(color.rgb(255, 215, 0), "", inline="jup", group=group_planets)
+
+show_saturn = input.bool(true, "♄ Saturn", inline="sat", group=group_planets)
+saturn_color = input.color(color.rgb(210, 180, 140), "", inline="sat", group=group_planets)
+
+show_uranus = input.bool(true, "⛢ Uranus", inline="ura", group=group_planets)
+uranus_color = input.color(color.rgb(0, 255, 255), "", inline="ura", group=group_planets)
+
+show_neptune = input.bool(true, "♆ Neptune", inline="nep", group=group_planets)
+neptune_color = input.color(color.rgb(65, 105, 225), "", inline="nep", group=group_planets)
+
+show_pluto = input.bool(true, "♇ Pluto", inline="plu", group=group_planets)
+pluto_color = input.color(color.rgb(186, 85, 211), "", inline="plu", group=group_planets)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Display
+// ═══════════════════════════════════════════════════════════════════
+group_display = "Display"
+
+retro_transp = input.int(20, "Retrograde Transparency", minval=0, maxval=100, group=group_display,
+    tooltip="Transparency for retrograde periods")
+
+show_dist = input.bool(true, "Show Distribution of Retrogrades", group=group_display,
+    tooltip="Show histogram of overlapping retrograde periods")
+dist_color = input.color(color.rgb(0, 255, 255), "Distribution Color", group=group_display,
+    tooltip="Color for the retrograde distribution histogram")
+dist_transp = input.int(10, "Distribution Transparency", minval=0, maxval=100, group=group_display)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Future Projections
+// ═══════════════════════════════════════════════════════════════════
+group_future = "Future Projections"
+
+look_ahead = input.int(250, "Bars to Look Ahead",
+    minval=1, maxval=500,
+    group=group_future,
+    tooltip="Number of future bars to scan for retrograde periods")
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════
+
+// Planet symbols
+SYMBOL_MERCURY = "☿"
+SYMBOL_VENUS   = "♀"
+SYMBOL_MARS    = "♂"
+SYMBOL_JUPITER = "♃"
+SYMBOL_SATURN  = "♄"
+SYMBOL_URANUS  = "⛢"
+SYMBOL_NEPTUNE = "♆"
+SYMBOL_PLUTO   = "♇"
+
+// Planet names
+NAME_MERCURY = "Mercury"
+NAME_VENUS   = "Venus"
+NAME_MARS    = "Mars"
+NAME_JUPITER = "Jupiter"
+NAME_SATURN  = "Saturn"
+NAME_URANUS  = "Uranus"
+NAME_NEPTUNE = "Neptune"
+NAME_PLUTO   = "Pluto"
+
+// Y-levels for stacking (1-8 for 8 planets)
+Y_MERCURY = 1.0
+Y_VENUS   = 2.0
+Y_MARS    = 3.0
+Y_JUPITER = 4.0
+Y_SATURN  = 5.0
+Y_URANUS  = 6.0
+Y_NEPTUNE = 7.0
+Y_PLUTO   = 8.0
+
+// Distribution histogram position (above planet bands)
+Y_DIST_BASE = 10.0
+Y_DIST_SCALE = 1.0  // Each retrograde planet adds this much height
+
+// Box half-height for visual separation
+BOX_HALF_HEIGHT = 0.4
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Bar Duration Calculation
+// ═══════════════════════════════════════════════════════════════════
+bar_gap_ms = timeframe.in_seconds(timeframe.period) * 1000
+bar_time = time
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Per-Bar Retrograde Detection and Color Calculation
+// ═══════════════════════════════════════════════════════════════════
+
+// Mercury
+mercury_is_retro = eph.get_speed(eph.Planet.Mercury, bar_time) < 0 and show_mercury
+mercury_fill = mercury_is_retro ? color.new(mercury_color, retro_transp) : na
+
+// Venus
+venus_is_retro = eph.get_speed(eph.Planet.Venus, bar_time) < 0 and show_venus
+venus_fill = venus_is_retro ? color.new(venus_color, retro_transp) : na
+
+// Mars
+mars_is_retro = eph.get_speed(eph.Planet.Mars, bar_time) < 0 and show_mars
+mars_fill = mars_is_retro ? color.new(mars_color, retro_transp) : na
+
+// Jupiter
+jupiter_is_retro = eph.get_speed(eph.Planet.Jupiter, bar_time) < 0 and show_jupiter
+jupiter_fill = jupiter_is_retro ? color.new(jupiter_color, retro_transp) : na
+
+// Saturn
+saturn_is_retro = eph.get_speed(eph.Planet.Saturn, bar_time) < 0 and show_saturn
+saturn_fill = saturn_is_retro ? color.new(saturn_color, retro_transp) : na
+
+// Uranus
+uranus_is_retro = eph.get_speed(eph.Planet.Uranus, bar_time) < 0 and show_uranus
+uranus_fill = uranus_is_retro ? color.new(uranus_color, retro_transp) : na
+
+// Neptune
+neptune_is_retro = eph.get_speed(eph.Planet.Neptune, bar_time) < 0 and show_neptune
+neptune_fill = neptune_is_retro ? color.new(neptune_color, retro_transp) : na
+
+// Pluto
+pluto_is_retro = eph.get_speed(eph.Planet.Pluto, bar_time) < 0 and show_pluto
+pluto_fill = pluto_is_retro ? color.new(pluto_color, retro_transp) : na
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Retrograde Distribution Count (for histogram)
+// ═══════════════════════════════════════════════════════════════════
+
+// Count how many planets are currently retrograde (enabled planets only)
+retro_count = 0
+retro_count := mercury_is_retro ? retro_count + 1 : retro_count
+retro_count := venus_is_retro ? retro_count + 1 : retro_count
+retro_count := mars_is_retro ? retro_count + 1 : retro_count
+retro_count := jupiter_is_retro ? retro_count + 1 : retro_count
+retro_count := saturn_is_retro ? retro_count + 1 : retro_count
+retro_count := uranus_is_retro ? retro_count + 1 : retro_count
+retro_count := neptune_is_retro ? retro_count + 1 : retro_count
+retro_count := pluto_is_retro ? retro_count + 1 : retro_count
+
+// Calculate distribution histogram height
+dist_height = Y_DIST_BASE + (retro_count * Y_DIST_SCALE)
+dist_fill_color = retro_count > 0 and show_dist ? color.new(dist_color, dist_transp) : na
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Plot Bounds for Fill (Hidden plots at Y +/- BOX_HALF_HEIGHT)
+// ═══════════════════════════════════════════════════════════════════
+
+// Mercury plots
+merc_up = plot(show_mercury ? Y_MERCURY + BOX_HALF_HEIGHT : na, display=display.none)
+merc_dn = plot(show_mercury ? Y_MERCURY - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Venus plots
+ven_up = plot(show_venus ? Y_VENUS + BOX_HALF_HEIGHT : na, display=display.none)
+ven_dn = plot(show_venus ? Y_VENUS - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Mars plots
+mars_up = plot(show_mars ? Y_MARS + BOX_HALF_HEIGHT : na, display=display.none)
+mars_dn = plot(show_mars ? Y_MARS - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Jupiter plots
+jup_up = plot(show_jupiter ? Y_JUPITER + BOX_HALF_HEIGHT : na, display=display.none)
+jup_dn = plot(show_jupiter ? Y_JUPITER - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Saturn plots
+sat_up = plot(show_saturn ? Y_SATURN + BOX_HALF_HEIGHT : na, display=display.none)
+sat_dn = plot(show_saturn ? Y_SATURN - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Uranus plots
+ura_up = plot(show_uranus ? Y_URANUS + BOX_HALF_HEIGHT : na, display=display.none)
+ura_dn = plot(show_uranus ? Y_URANUS - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Neptune plots
+nep_up = plot(show_neptune ? Y_NEPTUNE + BOX_HALF_HEIGHT : na, display=display.none)
+nep_dn = plot(show_neptune ? Y_NEPTUNE - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Pluto plots
+plu_up = plot(show_pluto ? Y_PLUTO + BOX_HALF_HEIGHT : na, display=display.none)
+plu_dn = plot(show_pluto ? Y_PLUTO - BOX_HALF_HEIGHT : na, display=display.none)
+
+// Distribution histogram plots
+dist_base_plot = plot(show_dist ? Y_DIST_BASE : na, display=display.none)
+dist_top_plot = plot(show_dist ? dist_height : na, display=display.none)
+
+// ═══════════════════════════════════════════════════════════════════
+// Fill Between Plot Bounds (Historical Visualization - No Box Limit!)
+// ═══════════════════════════════════════════════════════════════════
+
+fill(merc_up, merc_dn, mercury_fill)
+fill(ven_up, ven_dn, venus_fill)
+fill(mars_up, mars_dn, mars_fill)
+fill(jup_up, jup_dn, jupiter_fill)
+fill(sat_up, sat_dn, saturn_fill)
+fill(ura_up, ura_dn, uranus_fill)
+fill(nep_up, nep_dn, neptune_fill)
+fill(plu_up, plu_dn, pluto_fill)
+
+// Distribution histogram fill
+fill(dist_base_plot, dist_top_plot, dist_fill_color)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Drawing Object Arrays (for future projection cleanup)
+// ═══════════════════════════════════════════════════════════════════
+var array<box> retro_boxes = array.new<box>()
+var array<label> planet_labels = array.new<label>()
+
+// Current bar position indicator
+var line current_bar_line = na
+var label current_bar_top_triangle = na
+var label current_bar_bottom_triangle = na
+
+// Distribution label
+var label dist_label = na
+
+// Distribution future projection polylines (array for proper cleanup)
+var array<polyline> dist_projection_polylines = array.new<polyline>()
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Clear all drawing objects
+clear_all_drawings() =>
+    if array.size(retro_boxes) > 0
+        for i = 0 to array.size(retro_boxes) - 1
+            box.delete(array.get(retro_boxes, i))
+    array.clear(retro_boxes)
+
+    if array.size(planet_labels) > 0
+        for i = 0 to array.size(planet_labels) - 1
+            label.delete(array.get(planet_labels, i))
+    array.clear(planet_labels)
+
+// Check if planet is enabled
+is_planet_enabled(int idx) =>
+    switch idx
+        0 => show_mercury
+        1 => show_venus
+        2 => show_mars
+        3 => show_jupiter
+        4 => show_saturn
+        5 => show_uranus
+        6 => show_neptune
+        7 => show_pluto
+        => false
+
+// Get planet color by index
+get_planet_color(int idx) =>
+    switch idx
+        0 => mercury_color
+        1 => venus_color
+        2 => mars_color
+        3 => jupiter_color
+        4 => saturn_color
+        5 => uranus_color
+        6 => neptune_color
+        7 => pluto_color
+        => color.gray
+
+// Get planet Y-level by index
+get_planet_y(int idx) =>
+    switch idx
+        0 => Y_MERCURY
+        1 => Y_VENUS
+        2 => Y_MARS
+        3 => Y_JUPITER
+        4 => Y_SATURN
+        5 => Y_URANUS
+        6 => Y_NEPTUNE
+        7 => Y_PLUTO
+        => 1.0
+
+// Get planet symbol by index
+get_planet_symbol(int idx) =>
+    switch idx
+        0 => SYMBOL_MERCURY
+        1 => SYMBOL_VENUS
+        2 => SYMBOL_MARS
+        3 => SYMBOL_JUPITER
+        4 => SYMBOL_SATURN
+        5 => SYMBOL_URANUS
+        6 => SYMBOL_NEPTUNE
+        7 => SYMBOL_PLUTO
+        => "?"
+
+// Get planet name by index
+get_planet_name(int idx) =>
+    switch idx
+        0 => NAME_MERCURY
+        1 => NAME_VENUS
+        2 => NAME_MARS
+        3 => NAME_JUPITER
+        4 => NAME_SATURN
+        5 => NAME_URANUS
+        6 => NAME_NEPTUNE
+        7 => NAME_PLUTO
+        => "Unknown"
+
+// Get planet label text (symbol + name)
+get_planet_label(int idx) =>
+    get_planet_symbol(idx) + " " + get_planet_name(idx)
+
+// Get planet enum by index
+get_planet_enum(int idx) =>
+    switch idx
+        0 => eph.Planet.Mercury
+        1 => eph.Planet.Venus
+        2 => eph.Planet.Mars
+        3 => eph.Planet.Jupiter
+        4 => eph.Planet.Saturn
+        5 => eph.Planet.Uranus
+        6 => eph.Planet.Neptune
+        7 => eph.Planet.Pluto
+        => eph.Planet.Mercury
+
+// Get current retrograde status for future initialization
+get_current_is_retro(int idx) =>
+    switch idx
+        0 => mercury_is_retro
+        1 => venus_is_retro
+        2 => mars_is_retro
+        3 => jupiter_is_retro
+        4 => saturn_is_retro
+        5 => uranus_is_retro
+        6 => neptune_is_retro
+        7 => pluto_is_retro
+        => false
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projection (Box-based, only on last bar)
+// ═══════════════════════════════════════════════════════════════════
+
+if barstate.islast
+    // Clear previous drawings
+    clear_all_drawings()
+
+    // ─────────────────────────────────────────────────────────────────
+    // Future Projection Scanning and Drawing
+    // ─────────────────────────────────────────────────────────────────
+
+    // Temporary arrays for future retrograde periods per planet
+    var array<int> future_start = array.new<int>(8, na)
+    var array<bool> future_was_retro = array.new<bool>(8, false)
+
+    // Initialize future state from current historical state
+    for planet_idx = 0 to 7
+        if is_planet_enabled(planet_idx)
+            is_retro = get_current_is_retro(planet_idx)
+            array.set(future_was_retro, planet_idx, is_retro)
+            if is_retro
+                // Retrograde started in past - mark that we're continuing
+                array.set(future_start, planet_idx, bar_time)
+            else
+                array.set(future_start, planet_idx, na)
+        else
+            array.set(future_was_retro, planet_idx, false)
+            array.set(future_start, planet_idx, na)
+
+    // Scan forward from current bar
+    for i = 1 to look_ahead
+        future_time = bar_time + (bar_gap_ms * i)
+
+        for planet_idx = 0 to 7
+            if is_planet_enabled(planet_idx)
+                planet = get_planet_enum(planet_idx)
+                speed = eph.get_speed(planet, future_time)
+                is_retro = speed < 0
+                was_retro_f = array.get(future_was_retro, planet_idx)
+
+                col = get_planet_color(planet_idx)
+                y = get_planet_y(planet_idx)
+
+                // Station Retrograde - NEW retrograde starting in future
+                if not was_retro_f and is_retro
+                    array.set(future_start, planet_idx, future_time)
+
+                // Station Direct - retrograde ending, draw single box
+                else if was_retro_f and not is_retro
+                    start_t = array.get(future_start, planet_idx)
+
+                    if not na(start_t)
+                        // Check if retrograde started before current bar (spans past/future)
+                        started_in_past = start_t <= bar_time
+
+                        // Offset drawing times for alignment with historical offset=-1
+                        draw_future = future_time - bar_gap_ms
+                        draw_start = started_in_past ? bar_time : (start_t - bar_gap_ms)
+
+                        // Draw single box for entire retrograde period
+                        b = box.new(draw_start, y + BOX_HALF_HEIGHT, draw_future, y - BOX_HALF_HEIGHT,
+                            xloc=xloc.bar_time,
+                            bgcolor=color.new(col, retro_transp),
+                            border_color=color.new(col, retro_transp),
+                            border_width=0)
+                        array.push(retro_boxes, b)
+
+                    // Reset tracking
+                    array.set(future_start, planet_idx, na)
+
+                // Update state
+                array.set(future_was_retro, planet_idx, is_retro)
+
+    // ─────────────────────────────────────────────────────────────────
+    // Draw Ongoing Future Retrograde Boxes (extend to end of projection)
+    // ─────────────────────────────────────────────────────────────────
+    end_projection_time = bar_time + (bar_gap_ms * look_ahead)
+    draw_end_time = end_projection_time - bar_gap_ms
+
+    for planet_idx = 0 to 7
+        if is_planet_enabled(planet_idx)
+            is_retro_f = array.get(future_was_retro, planet_idx)
+            if is_retro_f
+                start_t = array.get(future_start, planet_idx)
+                col = get_planet_color(planet_idx)
+                y = get_planet_y(planet_idx)
+
+                if not na(start_t)
+                    started_in_past = start_t <= bar_time
+                    draw_start_t = started_in_past ? bar_time : (start_t - bar_gap_ms)
+
+                    // Draw single box extending to end of projection
+                    b = box.new(draw_start_t, y + BOX_HALF_HEIGHT, draw_end_time, y - BOX_HALF_HEIGHT,
+                        xloc=xloc.bar_time,
+                        bgcolor=color.new(col, retro_transp),
+                        border_color=color.new(col, retro_transp),
+                        border_width=0)
+                    array.push(retro_boxes, b)
+
+    // ─────────────────────────────────────────────────────────────────
+    // Draw Planet Symbol + Name Labels on Right Side
+    // ─────────────────────────────────────────────────────────────────
+    label_x_time = bar_time + (bar_gap_ms * (look_ahead + 5))
+
+    for planet_idx = 0 to 7
+        if is_planet_enabled(planet_idx)
+            col = get_planet_color(planet_idx)
+            y = get_planet_y(planet_idx)
+            label_text = get_planet_label(planet_idx)
+
+            planet_lab = label.new(label_x_time, y, label_text,
+                xloc=xloc.bar_time,
+                style=label.style_label_left,
+                color=color.new(color.white, 100),
+                textcolor=col,
+                size=size.normal)
+            array.push(planet_labels, planet_lab)
+
+    // ─────────────────────────────────────────────────────────────────
+    // Draw Distribution Label
+    // ─────────────────────────────────────────────────────────────────
+    if not na(dist_label)
+        label.delete(dist_label)
+
+    if show_dist
+        dist_label := label.new(label_x_time, Y_DIST_BASE + 4, "Distribution of Retrogrades",
+            xloc=xloc.bar_time,
+            style=label.style_label_left,
+            color=color.new(color.white, 100),
+            textcolor=dist_color,
+            size=size.normal)
+
+    // ─────────────────────────────────────────────────────────────────
+    // Draw Distribution Future Projection (Polyline)
+    // ─────────────────────────────────────────────────────────────────
+    // Delete ALL previous distribution polylines (array-based cleanup)
+    if array.size(dist_projection_polylines) > 0
+        for pl_idx = 0 to array.size(dist_projection_polylines) - 1
+            polyline.delete(array.get(dist_projection_polylines, pl_idx))
+        array.clear(dist_projection_polylines)
+
+    if show_dist
+        // Create point array WITHOUT var (fresh each time - critical!)
+        array<chart.point> dist_points = array.new<chart.point>()
+
+        // Starting base point - use 'time' (not offset) since fill already covers offset position
+        array.push(dist_points, chart.point.from_time(time, Y_DIST_BASE))
+        // Current bar height
+        array.push(dist_points, chart.point.from_time(time, Y_DIST_BASE + (retro_count * Y_DIST_SCALE)))
+
+        // Scan future bars and count retrograde planets at each
+        for i = 1 to look_ahead
+            future_time = time + (bar_gap_ms * i)
+
+            // Count retrograde planets at this future time
+            dist_count = 0
+            if show_mercury and eph.get_speed(eph.Planet.Mercury, future_time) < 0
+                dist_count += 1
+            if show_venus and eph.get_speed(eph.Planet.Venus, future_time) < 0
+                dist_count += 1
+            if show_mars and eph.get_speed(eph.Planet.Mars, future_time) < 0
+                dist_count += 1
+            if show_jupiter and eph.get_speed(eph.Planet.Jupiter, future_time) < 0
+                dist_count += 1
+            if show_saturn and eph.get_speed(eph.Planet.Saturn, future_time) < 0
+                dist_count += 1
+            if show_uranus and eph.get_speed(eph.Planet.Uranus, future_time) < 0
+                dist_count += 1
+            if show_neptune and eph.get_speed(eph.Planet.Neptune, future_time) < 0
+                dist_count += 1
+            if show_pluto and eph.get_speed(eph.Planet.Pluto, future_time) < 0
+                dist_count += 1
+
+            dist_future_height = Y_DIST_BASE + (dist_count * Y_DIST_SCALE)
+            array.push(dist_points, chart.point.from_time(future_time, dist_future_height))
+
+        // Close polygon back to base
+        last_future_time = time + (bar_gap_ms * look_ahead)
+        array.push(dist_points, chart.point.from_time(last_future_time, Y_DIST_BASE))
+
+        // Create polyline with xloc and push to tracking array
+        array.push(dist_projection_polylines, polyline.new(dist_points, xloc=xloc.bar_time, closed=true, fill_color=color.new(dist_color, dist_transp), line_color=color.new(dist_color, dist_transp)))
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Y-Axis Scale Lines (visual guides)
+// ═══════════════════════════════════════════════════════════════════
+hline(0.5, color=color.new(color.gray, 80), linestyle=hline.style_dotted)
+hline(8.5, color=color.new(color.gray, 80), linestyle=hline.style_dotted)
+hline(Y_DIST_BASE - 0.5, color=color.new(color.gray, 80), linestyle=hline.style_dotted)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Current Bar Position Indicator (LAST for z-order - renders on top)
+// ═══════════════════════════════════════════════════════════════════
+if barstate.islast
+    // Delete previous indicator
+    if not na(current_bar_line)
+        line.delete(current_bar_line)
+    if not na(current_bar_top_triangle)
+        label.delete(current_bar_top_triangle)
+    if not na(current_bar_bottom_triangle)
+        label.delete(current_bar_bottom_triangle)
+
+    // Calculate top Y based on whether distribution is shown
+    top_y = show_dist ? Y_DIST_BASE + 8.5 : 8.5
+    top_triangle_y = show_dist ? Y_DIST_BASE + 8.55 : 8.55
+
+    // Draw dashed vertical line at current bar (with offset)
+    current_bar_line := line.new(bar_time, 0.5, bar_time, top_y,
+        xloc=xloc.bar_time,
+        color=color.red,
+        style=line.style_dashed,
+        width=1)
+
+    // Top triangle pointing down
+    current_bar_top_triangle := label.new(bar_time, top_triangle_y, "▼",
+        xloc=xloc.bar_time,
+        style=label.style_none,
+        textcolor=color.red,
+        size=size.small)
+
+    // Bottom triangle pointing up
+    current_bar_bottom_triangle := label.new(bar_time, 0.3, "▲",
+        xloc=xloc.bar_time,
+        style=label.style_none,
+        textcolor=color.red,
+        size=size.small)

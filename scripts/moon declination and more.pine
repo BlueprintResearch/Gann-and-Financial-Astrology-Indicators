@@ -1,0 +1,746 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • MOON DECLINATION & MORE
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☽    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Comprehensive lunar declination visualization with Moon,
+//               Sun, and node declinations, phase coloring, zodiac signs,
+//               and future projections.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0
+// @version      2.0 (January 2026)
+//
+// @theory       Uses ELP2000-82 lunar theory and VSOP87 solar theory
+//               via Blueprint Research ephemeris libraries.
+//
+// @features     • Moon declination with lunar phase coloring
+//               • Sun declination overlay (optional)
+//               • North and South node declinations (☊ ☋)
+//               • Zodiac sign coloring with legend table
+//               • Node equatorial crossing markers
+//               • Out-of-Bounds (OOB) highlighting
+//               • Future projections up to 500 bars
+//               • Modern Blueprint color palette
+//
+// @credits      hsvColor library by kaigouthro (MPL 2.0)
+//               https://www.tradingview.com/script/7poJ0BTX-HSV-and-HSL-gradient-Tools-Built-in-Drop-in-replacement/
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025-2026 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0 (NonCommercial-ShareAlike)
+// ════════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("Moon Declination & More [BlueprintResearch]", overlay=false, max_bars_back=500, max_polylines_count=50, max_lines_count=500, max_labels_count=500)
+
+import BlueprintResearch/lib_ephemeris/1 as eph
+import BlueprintResearch/lib_elp2000_moon/2 as moon
+import BlueprintResearch/lib_vsop_core/1 as core
+import kaigouthro/hsvColor/17 as hsvColor
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs
+// ═══════════════════════════════════════════════════════════════════
+
+group_display = "Display Settings"
+showMoonDec = input.bool(true, "Show Moon Declination", group=group_display,
+    tooltip="The Moon's angular distance north or south of the celestial equator. Ranges from approximately -28.6° to +28.6° during major standstill periods.")
+showSunDec = input.bool(false, "Show Sun Declination", group=group_display,
+    tooltip="The Sun's declination follows the seasons, ranging from +23.44° (summer solstice) to -23.44° (winter solstice). Useful as a reference against Moon declination.")
+showNorthNode = input.bool(true, "Show North Node Declination (☊)", group=group_display)
+showSouthNode = input.bool(true, "Show South Node Declination (☋)", group=group_display)
+showLabels = input.bool(true, "Show Endpoint Labels", group=group_display)
+showRefLabels = input.bool(true, "Show Reference Line Labels", group=group_display)
+iTxtSize = input.string("Large", "Label Text Size", options=["Auto", "Tiny", "Small", "Normal", "Large"], group=group_display)
+vTxtSize = iTxtSize == "Auto" ? size.auto : iTxtSize == "Tiny" ? size.tiny : iTxtSize == "Small" ? size.small : iTxtSize == "Normal" ? size.normal : iTxtSize == "Large" ? size.large : size.small
+
+group_proj = "Future Projections"
+show_projections = input.bool(true, "Enable Future Projections", group=group_proj)
+look_ahead = input.int(250, "Look Ahead Bars", minval=1, maxval=500, group=group_proj)
+label_offset = input.int(100, "Label Offset Bars", minval=1, maxval=250, group=group_proj, tooltip="Number of bars to offset labels beyond projection endpoint")
+
+group_colors = "Colors"
+moonDecColor = input.color(#4ECDC4, "Moon Declination Color", group=group_colors)
+sunDecColor = input.color(#FFB946, "Sun Declination Color", group=group_colors)
+nodeNorthColor = input.color(color.lime, "North Node Color", group=group_colors)
+nodeSouthColor = input.color(#FF8A80, "South Node Color", group=group_colors)
+nodeLineWidth = input.int(2, "Node Line Width", minval=1, maxval=5, group=group_colors)
+
+group_phase = "Phase Colors"
+enablePhaseColoring = input.bool(false, "Enable Phase Coloring", group=group_phase,
+    tooltip="Colors the Moon declination based on lunar phase:\n• New Moon (0-90°): Seeding intentions, beginnings\n• First Quarter (90-180°): Action, challenges, growth\n• Full Moon (180-270°): Culmination, illumination, release\n• Last Quarter (270-360°): Reflection, letting go, rest")
+newMoonColor = input.color(#90A4AE, "New Moon (0-90°)", group=group_phase)
+firstQuarterColor = input.color(#4FD1C5, "First Quarter (90-180°)", group=group_phase)
+fullMoonColor = input.color(#FFD54F, "Full Moon (180-270°)", group=group_phase)
+lastQuarterColor = input.color(#B39DDB, "Last Quarter (270-360°)", group=group_phase)
+
+group_zodiac = "Zodiac"
+enableZodiacColoring = input.bool(false, "Enable Zodiac Sign Coloring (Nodes)", group=group_zodiac,
+    tooltip="Colors the node lines by their zodiac sign position. Shows a legend at top with all 12 signs color-coded for reference.")
+showZodiacCrossing = input.bool(false, "Show Zodiac Crossing", group=group_zodiac,
+    tooltip="Mark when the North Node crosses a specific zodiac degree. The North Node moves retrograde through the zodiac over an 18.6-year cycle.")
+zodiacSign = input.string("Aries", "Zodiac Sign", options=["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"], group=group_zodiac)
+zodiacDegree = input.int(0, "Degree (0-29)", minval=0, maxval=29, group=group_zodiac)
+zodiacCrossingColor = input.color(color.lime, "Zodiac Crossing Color", inline="zodiac_cross", group=group_zodiac)
+zodiacCrossingLineWidth = input.int(1, "Width", minval=1, maxval=5, inline="zodiac_cross", group=group_zodiac)
+iZodiacMarkerSize = input.string("Normal", "Marker", options=["Tiny", "Small", "Normal", "Large"], inline="zodiac_cross", group=group_zodiac)
+
+group_research = "Research"
+showStandstills = input.bool(true, "Show Standstill Thresholds", group=group_research,
+    tooltip="Shows horizontal lines at key declination levels:\n• ±28.6° Major Standstill (peak of 18.6-year cycle)\n• ±18.3° Minor Standstill (trough of cycle)\n• ±23.44° Out-of-Bounds threshold")
+showOOB = input.bool(false, "Highlight Out-of-Bounds", group=group_research,
+    tooltip="Highlights background when Moon declination exceeds ±23.44° (Sun's maximum). OOB Moon is associated with unconventional emotional expression and operating outside normal boundaries.")
+oobColor = input.color(color.new(#EF5350, 90), "OOB Background Color", group=group_research)
+showCrossings = input.bool(false, "Show Node Crossings", group=group_research, tooltip="Mark when node declination crosses 0° (equatorial passage)")
+crossingColor = input.color(#FF4081, "Crossing Color", inline="crossing", group=group_research)
+crossingLineWidth = input.int(1, "Width", minval=1, maxval=5, inline="crossing", group=group_research)
+iCrossingMarkerSize = input.string("Normal", "Marker", options=["Tiny", "Small", "Normal", "Large"], inline="crossing", group=group_research)
+vZodiacMarkerSize = iZodiacMarkerSize == "Tiny" ? size.tiny : iZodiacMarkerSize == "Small" ? size.small : iZodiacMarkerSize == "Normal" ? size.normal : size.large
+vCrossingMarkerSize = iCrossingMarkerSize == "Tiny" ? size.tiny : iCrossingMarkerSize == "Small" ? size.small : iCrossingMarkerSize == "Normal" ? size.normal : size.large
+
+// ═══════════════════════════════════════════════════════════════════
+// Astronomical Constants
+// ═══════════════════════════════════════════════════════════════════
+
+// Lunar standstill thresholds (approximate)
+float MAJOR_STANDSTILL = 28.6   // Max Moon declination during major standstill
+float MINOR_STANDSTILL = 18.3   // Max Moon declination during minor standstill
+
+// Out-of-bounds threshold (Sun's max declination = obliquity)
+float OOB_THRESHOLD = 23.436     // Moon is OOB when |decl| > this
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// @function Calculate Moon phase angle (0-360°)
+// @param timestamp Unix timestamp in milliseconds
+// @returns Phase angle where 0=New Moon, 180=Full Moon
+get_phase_angle(int timestamp) =>
+    float sun_lon = eph.get_longitude(eph.Planet.Sun, timestamp, true)
+    float moon_lon = eph.get_longitude(eph.Planet.Moon, timestamp, true)
+    core.mod360(moon_lon - sun_lon)
+
+// @function Get phase index (0=New, 1=First Quarter, 2=Full, 3=Last Quarter)
+// @param phase_angle Phase angle in degrees (0-360)
+// @returns Integer phase index 0-3
+get_phase_index(float phase_angle) =>
+    int idx = int(math.floor(phase_angle / 90.0))
+    math.min(idx, 3)
+
+// @function Get color for a given phase index
+// @param phase_idx Phase index 0-3
+// @returns Color for the phase
+get_phase_color(int phase_idx) =>
+    switch phase_idx
+        0 => newMoonColor
+        1 => firstQuarterColor
+        2 => fullMoonColor
+        3 => lastQuarterColor
+        => newMoonColor
+
+// ═══════════════════════════════════════════════════════════════════
+// Zodiac Coloring Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// @function Get hue value for zodiac sign (0-360 scale)
+// @param sign Zodiac sign name
+// @returns Hue value for the sign
+getHue(string sign) =>
+    var float hue = na
+    if sign == "Aries"
+        hue := 0
+    else if sign == "Taurus"
+        hue := 30
+    else if sign == "Gemini"
+        hue := 60
+    else if sign == "Cancer"
+        hue := 90
+    else if sign == "Leo"
+        hue := 120
+    else if sign == "Virgo"
+        hue := 150
+    else if sign == "Libra"
+        hue := 180
+    else if sign == "Scorpio"
+        hue := 210
+    else if sign == "Sagittarius"
+        hue := 240
+    else if sign == "Capricorn"
+        hue := 270
+    else if sign == "Aquarius"
+        hue := 300
+    else if sign == "Pisces"
+        hue := 330
+    hue
+
+// @function Convert degree (0-360°) to zodiac sign name
+// @param deg Degree value (0-360)
+// @returns Zodiac sign name
+getSignFromDegree(float deg) =>
+    float d = deg % 360
+    string sign = d >= 0   and d < 30  ? "Aries" :
+           d >= 30  and d < 60  ? "Taurus" :
+           d >= 60  and d < 90  ? "Gemini" :
+           d >= 90  and d < 120 ? "Cancer" :
+           d >= 120 and d < 150 ? "Leo" :
+           d >= 150 and d < 180 ? "Virgo" :
+           d >= 180 and d < 210 ? "Libra" :
+           d >= 210 and d < 240 ? "Scorpio" :
+           d >= 240 and d < 270 ? "Sagittarius" :
+           d >= 270 and d < 300 ? "Capricorn" :
+           d >= 300 and d < 330 ? "Aquarius" :
+           d >= 330 and d < 360 ? "Pisces" :
+           na
+    sign
+
+// @function Get HSV color from zodiac sign with custom tweaks
+// @param sign Zodiac sign name
+// @returns Color for the sign
+getZodiacColor(string sign) =>
+    float baseHue = getHue(sign)
+    // Custom hue tweaks for better visual distinction
+    float hue = sign == "Cancer"      ? 80 :
+          sign == "Leo"         ? 115 :
+          sign == "Virgo"       ? 155 :
+          sign == "Pisces"      ? 325 :
+          sign == "Aries"       ? 0   :
+          baseHue
+    // Custom saturation per sign
+    float sat = sign == "Leo"         ? 1.0  :
+          sign == "Pisces"      ? 0.9  :
+          sign == "Cancer"      ? 0.85 :
+          sign == "Virgo"       ? 0.9  :
+          sign == "Aquarius"    ? 0.95 :
+          1.0
+    // Custom brightness per sign
+    float val = sign == "Virgo"       ? 0.8  :
+          sign == "Pisces"      ? 0.8  :
+          sign == "Cancer"      ? 0.95 :
+          1.0
+    hsvColor.hsv(hue, sat, val, 1)
+
+// Convert zodiac sign and degree to absolute longitude (0-360)
+// @param sign Zodiac sign name
+// @param degree Degree within sign (0-29)
+// @returns Absolute longitude in degrees
+getAbsoluteDegree(string sign, int degree) =>
+    int base = sign == "Aries" ? 0 : sign == "Taurus" ? 30 : sign == "Gemini" ? 60 :
+               sign == "Cancer" ? 90 : sign == "Leo" ? 120 : sign == "Virgo" ? 150 :
+               sign == "Libra" ? 180 : sign == "Scorpio" ? 210 : sign == "Sagittarius" ? 240 :
+               sign == "Capricorn" ? 270 : sign == "Aquarius" ? 300 : 330
+    base + degree
+
+// Detect if longitude crossed a target degree between two values
+// Handles 360/0 boundary wrapping and both direct/retrograde motion
+// (Adapted from planetary_degrees script)
+// @param prev_lon Previous longitude value
+// @param curr_lon Current longitude value
+// @param target_deg Target longitude to detect crossing
+// @returns True if crossed target
+crossedLongitude(float prev_lon, float curr_lon, float target_deg) =>
+    bool result = false
+    if not na(prev_lon) and not na(curr_lon)
+        // Normalize all values to 0-360
+        float prev = prev_lon % 360
+        prev := prev < 0 ? prev + 360 : prev
+        float curr = curr_lon % 360
+        curr := curr < 0 ? curr + 360 : curr
+        float target = target_deg % 360
+        target := target < 0 ? target + 360 : target
+
+        // Calculate movement delta
+        float delta = curr - prev
+
+        // Handle wrap-around (crossed 360/0 boundary)
+        if delta > 180
+            delta -= 360
+        else if delta < -180
+            delta += 360
+
+        // Check if target was crossed
+        if delta > 0  // Forward motion
+            float t_rel = target - prev
+            if t_rel < 0
+                t_rel += 360
+            if t_rel <= delta and t_rel > 0
+                result := true
+        else if delta < 0  // Retrograde motion
+            float t_rel = prev - target
+            if t_rel < 0
+                t_rel += 360
+            if t_rel <= math.abs(delta) and t_rel > 0
+                result := true
+    result
+
+// ═══════════════════════════════════════════════════════════════════
+// Projection UDT and Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// UDT to group all projection drawing elements for easier management
+type ProjectionSet
+    array<polyline> polylines
+    array<line> lines
+    array<label> labels
+
+// UDT for celestial body projection data
+type ProjectionBody
+    string name           // "sun", "north_node", "south_node"
+    string symbol         // "☉", "☊", "☋"
+    float initial_dec     // starting declination
+    color lineColor       // line color
+    int lineWidth         // line width
+
+// Clear all projection elements from a ProjectionSet
+clearProjectionSet(ProjectionSet set) =>
+    for pl in set.polylines
+        polyline.delete(pl)
+    array.clear(set.polylines)
+    for ln in set.lines
+        line.delete(ln)
+    array.clear(set.lines)
+    for lb in set.labels
+        label.delete(lb)
+    array.clear(set.labels)
+
+// Generic declination projection - returns points array and endpoint info
+// @param bar_gap Time gap between bars in milliseconds
+// @param look_ahead Number of bars to project
+// @param initial_dec Starting declination value
+// @param body_type "sun", "north_node", or "south_node"
+// @returns Tuple of [points array, last time, last declination]
+projectDeclination(int bar_gap, int look_ahead, float initial_dec, string body_type) =>
+    array<chart.point> pts = array.new<chart.point>()
+    array.push(pts, chart.point.from_time(time, initial_dec))
+
+    int last_time = time
+    float last_dec = initial_dec
+
+    for i = 1 to look_ahead
+        int future_time = time + (bar_gap * i)
+        float future_T = core.get_julian_centuries(future_time)
+        float future_dec = switch body_type
+            "sun" => eph.get_declination(eph.Planet.Sun, future_time)
+            "north_node" => moon.get_north_node_declination(future_T)
+            "south_node" => moon.get_south_node_declination(future_T)
+            => na
+        array.push(pts, chart.point.from_time(future_time, future_dec))
+        last_time := future_time
+        last_dec := future_dec
+
+    [pts, last_time, last_dec]
+
+// Add a projection endpoint label
+// @param set ProjectionSet to add label to
+// @param label_time Time position for label
+// @param dec Declination position for label
+// @param symbol Symbol to display (☽, ☉, ☊, ☋)
+// @param col Color for the label
+addProjectionLabel(ProjectionSet set, int label_time, float dec, string symbol, color col, string txtSize) =>
+    array.push(set.labels, label.new(
+        label_time, dec, symbol,
+        xloc=xloc.bar_time,
+        style=label.style_text_outline,
+        color=color.new(col, 80),
+        textcolor=col,
+        size=txtSize == "Auto" ? size.auto : txtSize == "Tiny" ? size.tiny : txtSize == "Small" ? size.small : txtSize == "Normal" ? size.normal : size.large,
+        text_font_family=font.family_monospace
+    ))
+
+// ═══════════════════════════════════════════════════════════════════
+// Historical Data Calculation
+// ═══════════════════════════════════════════════════════════════════
+
+T = core.get_julian_centuries(time)
+
+// Declinations
+dec_moon = moon.get_declination(T)
+dec_sun = eph.get_declination(eph.Planet.Sun, time)
+dec_N = moon.get_north_node_declination(T)
+dec_S = moon.get_south_node_declination(T)
+
+// Phase calculation
+phase_angle = get_phase_angle(time)
+phase_idx = get_phase_index(phase_angle)
+phase_color = get_phase_color(phase_idx)
+
+// Node longitudes for zodiac coloring
+node_N_lon = moon.get_mean_north_node_lon(T)
+node_S_lon = core.mod360(node_N_lon + 180)
+
+// Zodiac colors for nodes
+sign_N = getSignFromDegree(node_N_lon)
+sign_S = getSignFromDegree(node_S_lon)
+zodiac_color_N = getZodiacColor(sign_N)
+zodiac_color_S = getZodiacColor(sign_S)
+
+// ═══════════════════════════════════════════════════════════════════
+// Historical Plots
+// ═══════════════════════════════════════════════════════════════════
+
+// Moon declination with phase-based or constant color
+plot_color = enablePhaseColoring ? phase_color : moonDecColor
+plot(showMoonDec ? dec_moon : na, "Moon Declination", color=plot_color, linewidth=2)
+
+// Sun declination
+plot(showSunDec ? dec_sun : na, "Sun Declination (☉)", color=sunDecColor, linewidth=2)
+
+// Node declinations - zodiac or constant colors
+plot_color_N = enableZodiacColoring ? zodiac_color_N : nodeNorthColor
+plot_color_S = enableZodiacColoring ? zodiac_color_S : nodeSouthColor
+plot(showNorthNode ? dec_N : na, "North Node Dec (☊)", color=plot_color_N, linewidth=nodeLineWidth)
+plot(showSouthNode ? dec_S : na, "South Node Dec (☋)", color=plot_color_S, linewidth=nodeLineWidth)
+
+// Zero line reference
+hline(0, "Zero Declination", color=#78909C, linestyle=hline.style_dotted)
+
+// Standstill and OOB threshold lines (use conditional colors for toggle)
+// Major standstill thresholds (soft red dashed - rare extremes)
+hline(MAJOR_STANDSTILL, "Major Standstill +", color=showStandstills ? color.new(#EF5350, 40) : na, linestyle=hline.style_dashed)
+hline(-MAJOR_STANDSTILL, "Major Standstill -", color=showStandstills ? color.new(#EF5350, 40) : na, linestyle=hline.style_dashed)
+
+// Minor standstill thresholds (muted orange dotted - cycle minimums)
+hline(MINOR_STANDSTILL, "Minor Standstill +", color=showStandstills ? color.new(#FFB74D, 50) : na, linestyle=hline.style_dotted)
+hline(-MINOR_STANDSTILL, "Minor Standstill -", color=showStandstills ? color.new(#FFB74D, 50) : na, linestyle=hline.style_dotted)
+
+// OOB threshold lines (muted gold dotted - Sun's max declination)
+hline(OOB_THRESHOLD, "OOB Threshold +", color=showStandstills ? color.new(#FFD54F, 50) : na, linestyle=hline.style_dotted)
+hline(-OOB_THRESHOLD, "OOB Threshold -", color=showStandstills ? color.new(#FFD54F, 50) : na, linestyle=hline.style_dotted)
+
+// Invisible anchor plots to maintain Y-axis scale when only reference lines are shown
+plot(showStandstills ? MAJOR_STANDSTILL : na, "Axis Anchor +", color=na, display=display.none, editable=false)
+plot(showStandstills ? -MAJOR_STANDSTILL : na, "Axis Anchor -", color=na, display=display.none, editable=false)
+
+// Out-of-Bounds background shading
+bool is_oob = math.abs(dec_moon) > OOB_THRESHOLD
+bgcolor(showOOB and is_oob ? oobColor : na, title="OOB Background")
+
+// ═══════════════════════════════════════════════════════════════════
+// Node Equatorial Crossings (Historical)
+// ═══════════════════════════════════════════════════════════════════
+
+// Track previous node declinations for crossing detection
+var float prev_dec_N_hist = na
+var float prev_dec_S_hist = na
+
+// Arrays to manage historical crossing elements (prevents accumulation)
+var array<line> hist_crossing_lines = array.new<line>()
+var array<label> hist_crossing_labels = array.new<label>()
+
+// Detect North Node crossing 0° declination
+if showCrossings and not na(prev_dec_N_hist) and dec_N * prev_dec_N_hist < 0
+    // North node crossed equator - draw crosshair marker
+    array.push(hist_crossing_lines, line.new(bar_index, -MAJOR_STANDSTILL, bar_index, MAJOR_STANDSTILL,
+        color=crossingColor, style=line.style_dashed, width=crossingLineWidth))
+    array.push(hist_crossing_labels, label.new(bar_index, MAJOR_STANDSTILL, "▼", style=label.style_none,
+        textcolor=crossingColor, size=vCrossingMarkerSize))
+    array.push(hist_crossing_labels, label.new(bar_index, -MAJOR_STANDSTILL - 1.5, "▲", style=label.style_none,
+        textcolor=crossingColor, size=vCrossingMarkerSize))
+
+// Detect South Node crossing 0° declination
+if showCrossings and not na(prev_dec_S_hist) and dec_S * prev_dec_S_hist < 0
+    // South node crossed equator - draw crosshair marker
+    array.push(hist_crossing_lines, line.new(bar_index, -MAJOR_STANDSTILL, bar_index, MAJOR_STANDSTILL,
+        color=crossingColor, style=line.style_dashed, width=crossingLineWidth))
+    array.push(hist_crossing_labels, label.new(bar_index, MAJOR_STANDSTILL, "▼", style=label.style_none,
+        textcolor=crossingColor, size=vCrossingMarkerSize))
+    array.push(hist_crossing_labels, label.new(bar_index, -MAJOR_STANDSTILL - 1.5, "▲", style=label.style_none,
+        textcolor=crossingColor, size=vCrossingMarkerSize))
+
+// Update previous values for next bar
+prev_dec_N_hist := dec_N
+prev_dec_S_hist := dec_S
+
+// ═══════════════════════════════════════════════════════════════════
+// North Node Zodiac Crossings (Historical)
+// ═══════════════════════════════════════════════════════════════════
+
+// Track previous node longitude for zodiac crossing detection
+var float prev_lon_N_hist = na
+
+// Calculate target longitude from user inputs
+int targetLongitude = getAbsoluteDegree(zodiacSign, zodiacDegree)
+
+// Detect North Node crossing target zodiac degree
+if showZodiacCrossing and not na(prev_lon_N_hist) and crossedLongitude(prev_lon_N_hist, node_N_lon, targetLongitude)
+    array.push(hist_crossing_lines, line.new(bar_index - 1, -MAJOR_STANDSTILL, bar_index - 1, MAJOR_STANDSTILL,
+        color=zodiacCrossingColor, style=line.style_dashed, width=zodiacCrossingLineWidth))
+    array.push(hist_crossing_labels, label.new(bar_index - 1, MAJOR_STANDSTILL, "▼",
+        style=label.style_none, textcolor=zodiacCrossingColor, size=vZodiacMarkerSize))
+    array.push(hist_crossing_labels, label.new(bar_index - 1, -MAJOR_STANDSTILL - 1.5, "▲",
+        style=label.style_none, textcolor=zodiacCrossingColor, size=vZodiacMarkerSize))
+
+// Update previous longitude for next bar
+prev_lon_N_hist := node_N_lon
+
+// ═══════════════════════════════════════════════════════════════════
+// Zodiac Sign Legend Table
+// ═══════════════════════════════════════════════════════════════════
+
+// Color legend showing all 12 signs for reference when zodiac coloring is enabled
+var table zodiac_legend = table.new(position.top_center, 12, 1, bgcolor=na, border_width=0)
+
+if barstate.islast and enableZodiacColoring
+    string[] signs = array.from("Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+        "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces")
+    for i = 0 to 11
+        string sign_name = array.get(signs, i)
+        table.cell(zodiac_legend, i, 0, sign_name,
+            text_color=getZodiacColor(sign_name), text_size=vTxtSize,
+            text_font_family=font.family_monospace)
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projections
+// ═══════════════════════════════════════════════════════════════════
+
+// UDT instance to track all projection elements
+var ProjectionSet projSet = ProjectionSet.new(
+    array.new<polyline>(),
+    array.new<line>(),
+    array.new<label>()
+)
+
+if barstate.islast and show_projections
+    // Clear all previous projection elements
+    clearProjectionSet(projSet)
+
+    // Note: Historical crossing elements (hist_crossing_lines/labels) persist -
+    // they're created during historical data loading and should remain visible
+
+    // Calculate bar gap in milliseconds
+    int bar_gap = int(timeframe.in_seconds(timeframe.period) * 1000)
+
+    // Array to collect crossing times for deferred drawing (z-order: crosshairs on top)
+    array<int> crossing_times = array.new<int>()
+    array<int> zodiac_crossing_times = array.new<int>()
+
+    // ─────── Moon Declination ───────
+    // When phase coloring is OFF: use polyline (1 line instead of 500)
+    // When phase coloring is ON: use line segments for per-segment colors
+    if showMoonDec
+        int last_time = time
+        float last_dec = dec_moon
+        int last_phase = get_phase_index(get_phase_angle(time))
+
+        if enablePhaseColoring
+            // Line segment approach for per-segment phase coloring
+            int prev_time = time
+            float prev_dec = dec_moon
+            int prev_phase = last_phase
+
+            for i = 1 to look_ahead
+                int future_time = time + (bar_gap * i)
+                float future_T = core.get_julian_centuries(future_time)
+                float future_dec = moon.get_declination(future_T)
+                int future_phase = get_phase_index(get_phase_angle(future_time))
+
+                // Color based on starting point's phase
+                color seg_color = get_phase_color(prev_phase)
+
+                // Create line segment
+                array.push(projSet.lines, line.new(
+                    prev_time, prev_dec,
+                    future_time, future_dec,
+                    xloc=xloc.bar_time,
+                    color=seg_color,
+                    width=2
+                ))
+
+                // Update for next iteration
+                prev_time := future_time
+                prev_dec := future_dec
+                prev_phase := future_phase
+                last_time := future_time
+                last_dec := future_dec
+                last_phase := future_phase
+        else
+            // Polyline approach (saves ~499 lines when phase coloring is OFF)
+            array<chart.point> moon_pts = array.new<chart.point>()
+            array.push(moon_pts, chart.point.from_time(time, dec_moon))
+
+            for i = 1 to look_ahead
+                int future_time = time + (bar_gap * i)
+                float future_T = core.get_julian_centuries(future_time)
+                float future_dec = moon.get_declination(future_T)
+                array.push(moon_pts, chart.point.from_time(future_time, future_dec))
+                last_time := future_time
+                last_dec := future_dec
+                last_phase := get_phase_index(get_phase_angle(future_time))
+
+            if array.size(moon_pts) > 1
+                array.push(projSet.polylines, polyline.new(
+                    moon_pts,
+                    xloc=xloc.bar_time,
+                    line_color=moonDecColor,
+                    line_style=line.style_solid,
+                    line_width=2
+                ))
+
+        // Add Moon label at endpoint with offset
+        if showLabels
+            color label_color = enablePhaseColoring ? get_phase_color(last_phase) : moonDecColor
+            int label_time = last_time + (bar_gap * 5)
+            array.push(projSet.labels, label.new(
+                label_time,
+                last_dec,
+                "☽",
+                xloc=xloc.bar_time,
+                style=label.style_text_outline,
+                color=color.new(label_color, 80),
+                textcolor=label_color,
+                size=vTxtSize,
+                text_font_family=font.family_monospace
+            ))
+
+    // ─────── Sun / North Node / South Node Projections (unified loop) ───────
+    // Build array of bodies to project (similar to vsop_term pattern in Core_Util)
+    array<ProjectionBody> bodies = array.new<ProjectionBody>()
+    if showSunDec
+        array.push(bodies, ProjectionBody.new("sun", "☉", dec_sun, sunDecColor, 2))
+    if showNorthNode
+        array.push(bodies, ProjectionBody.new("north_node", "☊", dec_N, nodeNorthColor, nodeLineWidth))
+    if showSouthNode
+        array.push(bodies, ProjectionBody.new("south_node", "☋", dec_S, nodeSouthColor, nodeLineWidth))
+
+    // Crossing detection state (for nodes only)
+    float prev_proj_dec_N = dec_N
+    float prev_proj_dec_S = dec_S
+    float prev_proj_lon_N = node_N_lon
+
+    // Project all bodies in a single unified loop (guard against empty array)
+    if array.size(bodies) > 0
+        for b = 0 to array.size(bodies) - 1
+            ProjectionBody body = array.get(bodies, b)
+
+            array<chart.point> pts = array.new<chart.point>()
+            array.push(pts, chart.point.from_time(time, body.initial_dec))
+
+            int last_time = time
+            float last_dec = body.initial_dec
+
+            for i = 1 to look_ahead
+                int future_time = time + (bar_gap * i)
+                float future_T = core.get_julian_centuries(future_time)
+                float future_dec = switch body.name
+                    "sun" => eph.get_declination(eph.Planet.Sun, future_time)
+                    "north_node" => moon.get_north_node_declination(future_T)
+                    "south_node" => moon.get_south_node_declination(future_T)
+                    => na
+                array.push(pts, chart.point.from_time(future_time, future_dec))
+
+                // Node crossing detection (only for nodes)
+                if body.name == "north_node"
+                    float future_lon_N = moon.get_mean_north_node_lon(future_T)
+                    if showCrossings and future_dec * prev_proj_dec_N < 0
+                        array.push(crossing_times, future_time)
+                    if showZodiacCrossing and crossedLongitude(prev_proj_lon_N, future_lon_N, targetLongitude)
+                        array.push(zodiac_crossing_times, future_time - bar_gap)
+                    prev_proj_dec_N := future_dec
+                    prev_proj_lon_N := future_lon_N
+                else if body.name == "south_node"
+                    if showCrossings and future_dec * prev_proj_dec_S < 0
+                        array.push(crossing_times, future_time)
+                    prev_proj_dec_S := future_dec
+
+                last_time := future_time
+                last_dec := future_dec
+
+            // Create polyline for this body
+            if array.size(pts) > 1
+                array.push(projSet.polylines, polyline.new(pts, xloc=xloc.bar_time,
+                    line_color=body.lineColor, line_style=line.style_solid, line_width=body.lineWidth))
+
+            // Add endpoint label
+            if showLabels
+                array.push(projSet.labels, label.new(last_time + (bar_gap * 5), last_dec, body.symbol,
+                    xloc=xloc.bar_time, style=label.style_text_outline,
+                    color=color.new(body.lineColor, 80), textcolor=body.lineColor,
+                    size=vTxtSize, text_font_family=font.family_monospace))
+
+    // ─────── Reference Lines in Future Projection Zone ───────
+    // Calculate future zone boundaries
+    int proj_start_time = time
+    int proj_end_time = time + (bar_gap * look_ahead)
+    int ref_label_time = proj_end_time + (bar_gap * label_offset)
+
+    // Reference line colors (matching hline colors)
+    color zero_color = #78909C
+    color major_color = color.new(#EF5350, 40)
+    color minor_color = color.new(#FFB74D, 50)
+    color oob_color = color.new(#FFD54F, 50)
+
+    // Zero Declination label (hline already extends infinitely)
+    if showRefLabels
+        array.push(projSet.labels, label.new(ref_label_time, 0, "0° Equator",
+            xloc=xloc.bar_time, style=label.style_text_outline,
+            color=color.new(zero_color, 80), textcolor=zero_color,
+            size=vTxtSize, text_font_family=font.family_monospace,
+            tooltip="Celestial Equator\nMoon crosses between northern and southern hemispheres approximately twice per lunar month."))
+
+    // Standstill and OOB labels (hlines already extend infinitely)
+    if showStandstills
+        // Major Standstill (±28.6°)
+        if showRefLabels
+            string major_tooltip = "Major Lunar Standstill (±28.6°)\nPeak of the 18.6-year nodal cycle. Moon reaches extreme declinations when North Node is near 0° Aries. Associated with heightened emotional intensity, significant revelations, and extremes. Ancient sites like Stonehenge were aligned to track this phenomenon."
+            array.push(projSet.labels, label.new(ref_label_time, MAJOR_STANDSTILL, "+28.6° Major",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(major_color, 80), textcolor=color.new(#EF5350, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=major_tooltip))
+            array.push(projSet.labels, label.new(ref_label_time, -MAJOR_STANDSTILL, "-28.6° Major",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(major_color, 80), textcolor=color.new(#EF5350, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=major_tooltip))
+
+        // Minor Standstill (±18.3°)
+        if showRefLabels
+            string minor_tooltip = "Minor Lunar Standstill (±18.3°)\nTrough of the 18.6-year nodal cycle. Moon's declination range is minimized when North Node is near 0° Libra. Associated with emotional equilibrium, stability, and a lower emotional landscape. The yin phase of the lunar nodal cycle."
+            array.push(projSet.labels, label.new(ref_label_time, MINOR_STANDSTILL, "+18.3° Minor",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(minor_color, 80), textcolor=color.new(#FFB74D, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=minor_tooltip))
+            array.push(projSet.labels, label.new(ref_label_time, -MINOR_STANDSTILL, "-18.3° Minor",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(minor_color, 80), textcolor=color.new(#FFB74D, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=minor_tooltip))
+
+        // OOB Threshold (±23.436°)
+        if showRefLabels
+            string oob_tooltip = "Out-of-Bounds Threshold (±23.436°)\nEarth's axial tilt (obliquity). When Moon exceeds this declination, it is 'Out of Bounds' - beyond the Sun's maximum reach. OOB Moon is associated with unconventional emotional expression, independence, visionary thinking, and operating outside normal rules. Term coined by astrologer Kt Boehrer."
+            array.push(projSet.labels, label.new(ref_label_time, OOB_THRESHOLD, "+23.4° OOB",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(oob_color, 80), textcolor=color.new(#FFD54F, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=oob_tooltip))
+            array.push(projSet.labels, label.new(ref_label_time, -OOB_THRESHOLD, "-23.4° OOB",
+                xloc=xloc.bar_time, style=label.style_text_outline,
+                color=color.new(oob_color, 80), textcolor=color.new(#FFD54F, 0),
+                size=vTxtSize, text_font_family=font.family_monospace, tooltip=oob_tooltip))
+
+    // ─────── Node Equatorial Crossings (drawn last for z-order) ───────
+    if showCrossings and array.size(crossing_times) > 0
+        for i = 0 to array.size(crossing_times) - 1
+            int cross_time = array.get(crossing_times, i)
+            array.push(projSet.lines, line.new(cross_time, -MAJOR_STANDSTILL, cross_time, MAJOR_STANDSTILL,
+                xloc=xloc.bar_time, color=crossingColor, style=line.style_dashed, width=crossingLineWidth))
+            array.push(projSet.labels, label.new(cross_time, MAJOR_STANDSTILL, "▼",
+                xloc=xloc.bar_time, style=label.style_none, textcolor=crossingColor, size=vCrossingMarkerSize))
+            array.push(projSet.labels, label.new(cross_time, -MAJOR_STANDSTILL - 1.5, "▲",
+                xloc=xloc.bar_time, style=label.style_none, textcolor=crossingColor, size=vCrossingMarkerSize))
+
+    // ─────── North Node Zodiac Crossings (drawn last for z-order) ───────
+    if showZodiacCrossing and array.size(zodiac_crossing_times) > 0
+        for i = 0 to array.size(zodiac_crossing_times) - 1
+            int cross_time = array.get(zodiac_crossing_times, i)
+            array.push(projSet.lines, line.new(cross_time, -MAJOR_STANDSTILL, cross_time, MAJOR_STANDSTILL,
+                xloc=xloc.bar_time, color=zodiacCrossingColor, style=line.style_dashed, width=zodiacCrossingLineWidth))
+            array.push(projSet.labels, label.new(cross_time, MAJOR_STANDSTILL, "▼",
+                xloc=xloc.bar_time, style=label.style_none, textcolor=zodiacCrossingColor, size=vZodiacMarkerSize))
+            array.push(projSet.labels, label.new(cross_time, -MAJOR_STANDSTILL - 1.5, "▲",
+                xloc=xloc.bar_time, style=label.style_none, textcolor=zodiacCrossingColor, size=vZodiacMarkerSize))

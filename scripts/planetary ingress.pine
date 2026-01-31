@@ -1,0 +1,454 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • PLANETARY INGRESS INDICATOR
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @indicator    Planetary Ingresses
+// @description  Displays when planets change zodiac signs (ingresses).
+//               Shows historical ingresses on the chart and projects
+//               future ingresses ahead. Supports geocentric and heliocentric
+//               coordinates, retrograde detection, and sign-based color coding.
+//
+// @accuracy    Do not expect 100% accuracy. The ephemeris libraries used here
+//              contain truncated terms to fit Pine Script limitations.
+//              - Faster-moving planets (Sun through Mars): ±1 day
+//              - Outer planets (Jupiter through Pluto): 1 day to 1 week+
+//                for specific events like ingresses
+//              For precise timing, please cross-reference with a professional
+//              ephemeris outside of TradingView (e.g., JPL Horizons, Swiss Ephemeris).
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0
+//
+// @features     - Historical ingress markers with retrograde indicator
+//               - Future ingress projections with date labels
+//               - Per-sign toggle visibility
+//               - Per-sign alert conditions
+//               - Optional sign-based color coding
+//               - Geocentric/Heliocentric toggle
+//
+// @depends      BlueprintResearch/lib_ephemeris/1
+//
+// @open_source  Part of the open-source Planetary Ephemeris project.
+//               Study, modify, and share freely.
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2026 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0
+// ════════════════════════════════════════════════════════════════
+//
+
+//@version=6
+indicator("Planetary Ingress", overlay=true, max_labels_count = 500, max_lines_count = 500)
+
+import BlueprintResearch/lib_ephemeris/1 as eph
+import BlueprintResearch/lib_elp2000_moon/2 as moon
+import BlueprintResearch/lib_vsop_core/1 as core
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - General Settings
+// ═══════════════════════════════════════════════════════════════════
+
+group_general = "General Settings"
+
+planet_in = input.string(
+     "☉︎ Sun",
+     "Planet",
+     options=["☉︎ Sun", "☽︎ Moon", "☊ North Node", "☋ South Node", "☿ Mercury", "♀ Venus", "♂ Mars", "♃ Jupiter", "♄ Saturn", "⛢ Uranus", "♆ Neptune", "♇ Pluto"],
+     group = group_general,
+     inline = "p1")
+
+geo = input.bool(
+     true, 
+     "Geocentric View", 
+     tooltip="Uncheck for Heliocentric coordinates", 
+     group = group_general,
+     inline = "p1")
+
+indiv_col = input.bool(
+     true, 
+     "Color-Code by Zodiac Sign", 
+     tooltip="When enabled, each sign uses its own color. When disabled, uses single planet color.", 
+     group = group_general)
+
+planet_col = input.color(
+     color.blue, 
+     "Single Planet Color", 
+     tooltip="Used when 'Color-Code by Zodiac Sign' is disabled", 
+     group = group_general)
+
+text_col = input.color(
+     #000000, 
+     "Label Text Color", 
+     tooltip="Black for dark backgrounds, try white (#FFFFFF) for light charts", 
+     group = group_general)
+
+trans = input.int(
+     0, 
+     "Label Background Transparency", 
+     minval=0, maxval=100, 
+     tooltip="0 = solid, 100 = fully transparent", 
+     group = group_general)
+
+iTxtSize = input.string(
+     "Large", 
+     "Label Text Size", 
+     options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], 
+     group = group_general)
+
+vTxtSize = iTxtSize == "Auto" ? size.auto :
+           iTxtSize == "Tiny" ? size.tiny :
+           iTxtSize == "Small" ? size.small :
+           iTxtSize == "Normal" ? size.normal :
+           iTxtSize == "Large" ? size.large :
+           iTxtSize == "Huge" ? size.huge : size.small
+
+look_ahead = input.int(
+     250, 
+     "Future Look-Ahead (Bars)", 
+     minval=50, maxval=500, 
+     tooltip="How many bars ahead to search for the next ingress", 
+     group = group_general)
+
+show_Planet = input.bool(
+     true, 
+     "Show Historical Ingress Markers", 
+     group = group_general)
+
+show_Planet_future = input.bool(
+     true, 
+     "Show Next Future Ingress", 
+     group = group_general)
+
+tz_input = input.string(
+     "UTC", 
+     "Timezone for Future Date/Time", 
+     options=["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", 
+              "Europe/London", "Europe/Paris", "Asia/Tokyo", "Asia/Hong_Kong", "Australia/Sydney"], 
+     group = group_general)
+
+show_future_datetime = input.bool(
+     true, 
+     "Display Date & Time on Future Label", 
+     group = group_general)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Sign Colors (Color-Coded Mode)
+// ═══════════════════════════════════════════════════════════════════
+
+group_colors = "Zodiac Sign Colors — Used when 'Color-Code by Zodiac Sign' is enabled"
+
+col_aries        = input.color(#ff5656,       "♈ Aries",        group = group_colors)
+col_taurus       = input.color(color.rgb(88, 239, 46), "♉ Taurus",       group = group_colors)
+col_gemini       = input.color(#f1fe01,       "♊ Gemini",       group = group_colors)
+col_cancer       = input.color(#82f2ff,       "♋ Cancer",       group = group_colors)
+col_leo          = input.color(#ffb404,       "♌ Leo",          group = group_colors)
+col_virgo        = input.color(color.rgb(124, 90, 17), "♍ Virgo",        group = group_colors)
+col_libra        = input.color(#f9769d,       "♎ Libra",        group = group_colors)
+col_scorpio      = input.color(#952626,       "♏ Scorpio",      group = group_colors)
+col_sagittarius  = input.color(color.rgb(131, 47, 177), "♐ Sagittarius",  group = group_colors)
+col_capricorn    = input.color(#282b28,       "♑ Capricorn",    group = group_colors)
+col_aquarius     = input.color(#03faccc9,     "♒ Aquarius",     group = group_colors)
+col_pisces       = input.color(#9bff94,       "♓ Pisces",       group = group_colors)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Sign Visibility
+// ═══════════════════════════════════════════════════════════════════
+
+group_signs = "Show/Hide Individual Zodiac Signs"
+
+show_aries       = input.bool(true, "Aries",       group = group_signs)
+show_taurus      = input.bool(true, "Taurus",      group = group_signs)
+show_gemini      = input.bool(true, "Gemini",      group = group_signs)
+show_cancer      = input.bool(true, "Cancer",      group = group_signs)
+show_leo         = input.bool(true, "Leo",         group = group_signs)
+show_virgo       = input.bool(true, "Virgo",       group = group_signs)
+show_libra       = input.bool(true, "Libra",       group = group_signs)
+show_scorpio     = input.bool(true, "Scorpio",     group = group_signs)
+show_sagittarius = input.bool(true, "Sagittarius", group = group_signs)
+show_capricorn   = input.bool(true, "Capricorn",   group = group_signs)
+show_aquarius    = input.bool(true, "Aquarius",    group = group_signs)
+show_pisces      = input.bool(true, "Pisces",      group = group_signs)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Alert Conditions
+// ═══════════════════════════════════════════════════════════════════
+
+group_alerts = "Alert on Ingress into Specific Signs"
+
+alert_aries       = input.bool(false, "Aries",       group = group_alerts)
+alert_taurus      = input.bool(false, "Taurus",      group = group_alerts)
+alert_gemini      = input.bool(false, "Gemini",      group = group_alerts)
+alert_cancer      = input.bool(false, "Cancer",      group = group_alerts)
+alert_leo         = input.bool(false, "Leo",         group = group_alerts)
+alert_virgo       = input.bool(false, "Virgo",       group = group_alerts)
+alert_libra       = input.bool(false, "Libra",       group = group_alerts)
+alert_scorpio     = input.bool(false, "Scorpio",     group = group_alerts)
+alert_sagittarius = input.bool(false, "Sagittarius", group = group_alerts)
+alert_capricorn   = input.bool(false, "Capricorn",   group = group_alerts)
+alert_aquarius    = input.bool(false, "Aquarius",    group = group_alerts)
+alert_pisces      = input.bool(false, "Pisces",      group = group_alerts)
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Convert longitude to degree-sign format (e.g., "15°Ari32'")
+degsign(float lon) =>
+    signs = array.from("Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis")
+    norm = lon % 360
+    norm := norm < 0 ? norm + 360 : norm
+    sign_idx = int(norm / 30)
+    deg_in_sign = norm % 30
+    deg = int(deg_in_sign)
+    min = int((deg_in_sign - deg) * 60)
+    str.tostring(deg) + "°" + array.get(signs, sign_idx) + str.tostring(min) + "'"
+
+// Get zodiac sign name from longitude
+get_sign(long) =>
+    long_norm = long % 360
+    if long_norm < 0
+        long_norm += 360
+    switch
+        long_norm < 30 => "Aries"
+        long_norm < 60 => "Taurus"
+        long_norm < 90 => "Gemini"
+        long_norm < 120 => "Cancer"
+        long_norm < 150 => "Leo"
+        long_norm < 180 => "Virgo"
+        long_norm < 210 => "Libra"
+        long_norm < 240 => "Scorpio"
+        long_norm < 270 => "Sagittarius"
+        long_norm < 300 => "Capricorn"
+        long_norm < 330 => "Aquarius"
+        => "Pisces"
+
+// Check if sign should be displayed based on user settings
+get_show(sign) =>
+    switch sign
+        "Aries" => show_aries
+        "Taurus" => show_taurus
+        "Gemini" => show_gemini
+        "Cancer" => show_cancer
+        "Leo" => show_leo
+        "Virgo" => show_virgo
+        "Libra" => show_libra
+        "Scorpio" => show_scorpio
+        "Sagittarius" => show_sagittarius
+        "Capricorn" => show_capricorn
+        "Aquarius" => show_aquarius
+        "Pisces" => show_pisces
+        => false
+
+// Check if sign has alert enabled
+get_alert(sign) =>
+    switch sign
+        "Aries" => alert_aries
+        "Taurus" => alert_taurus
+        "Gemini" => alert_gemini
+        "Cancer" => alert_cancer
+        "Leo" => alert_leo
+        "Virgo" => alert_virgo
+        "Libra" => alert_libra
+        "Scorpio" => alert_scorpio
+        "Sagittarius" => alert_sagittarius
+        "Capricorn" => alert_capricorn
+        "Aquarius" => alert_aquarius
+        "Pisces" => alert_pisces
+        => false
+
+// Get sign-specific color for color-coding mode
+get_indiv_color(sign) =>
+    switch sign
+        "Aries" => col_aries
+        "Taurus" => col_taurus
+        "Gemini" => col_gemini
+        "Cancer" => col_cancer
+        "Leo" => col_leo
+        "Virgo" => col_virgo
+        "Libra" => col_libra
+        "Scorpio" => col_scorpio
+        "Sagittarius" => col_sagittarius
+        "Capricorn" => col_capricorn
+        "Aquarius" => col_aquarius
+        "Pisces" => col_pisces
+        => na
+
+// Get zodiac symbol for sign
+get_symbol(sign) =>
+    switch sign
+        "Aries" => "♈"
+        "Taurus" => "♉"
+        "Gemini" => "♊"
+        "Cancer" => "♋"
+        "Leo" => "♌"
+        "Virgo" => "♍"
+        "Libra" => "♎"
+        "Scorpio" => "♏"
+        "Sagittarius" => "♐"
+        "Capricorn" => "♑"
+        "Aquarius" => "♒"
+        "Pisces" => "♓"
+        => na
+
+// Check if selected planet is a lunar node
+is_north_node() => str.contains(planet_in, "North Node") or str.contains(planet_in, "☊")
+is_south_node() => str.contains(planet_in, "South Node") or str.contains(planet_in, "☋")
+is_any_node() => is_north_node() or is_south_node()
+
+// Get node longitude (uses Moon library directly)
+get_node_lon(float t) =>
+    T = core.get_julian_centuries(t)
+    is_north_node() ? moon.get_mean_north_node_lon(T) : moon.get_mean_south_node_lon(T)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Planet Data & Sign Detection
+// ═══════════════════════════════════════════════════════════════════
+
+// Convert planet string to enum and get current position
+// For nodes, call Moon library directly; for planets, use ephemeris library
+planet = eph.string_to_planet(planet_in)
+long_out = is_any_node() ? get_node_lon(time) : eph.get_longitude(planet, time, geo)
+
+// Retrograde detection (Sun never retrogrades, nodes always retrograde naturally so we skip them)
+is_sun = planet == eph.Planet.Sun
+is_retro = geo and not is_sun and not is_any_node() ? eph.is_retrograde(planet, time) : false
+string retro_tt_out = is_retro ? "℞" : ""
+
+// Extract planet symbol from input string
+first_element_ = str.substring(planet_in, 0, 1)
+
+// Detect sign changes (ingresses)
+current_sign = get_sign(long_out)
+var string last_sign = na
+cross = current_sign != last_sign
+if cross
+    last_sign := current_sign
+
+// Determine label color based on settings
+color bg_col = na
+if cross and get_show(current_sign)
+    base_col = indiv_col ? get_indiv_color(current_sign) : planet_col
+    bg_col := color.new(base_col, trans)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projections
+// ═══════════════════════════════════════════════════════════════════
+
+// State variables for tracking future sign changes
+var string last_sign_future = "Unknown"
+var bool first_future_sign_checked = false
+var array<line> pl_lines = array.new<line>()
+var array<label> pl_labs = array.new<label>()
+var array<label> pl_labs_bottom = array.new<label>()
+
+// Calculate proportional line height for future markers
+line_height = ta.atr(14) * 2
+
+// Project future ingresses on the last bar
+if barstate.islast or barstate.isrealtime
+    // ═══ CLEANUP ALL PREVIOUS MARKERS ═══
+    for ln in pl_lines
+        line.delete(ln)
+    array.clear(pl_lines)
+
+    for lb in pl_labs
+        label.delete(lb)
+    array.clear(pl_labs)
+
+    for lb in pl_labs_bottom
+        label.delete(lb)
+    array.clear(pl_labs_bottom)
+
+    bar_gap_seconds = timeframe.in_seconds(timeframe.period)
+    bar_gap = bar_gap_seconds * 1000
+
+    for i = 1 to look_ahead
+        future_time = time + (bar_gap * i)
+
+        // Get future planet position
+        current_value = is_any_node() ? get_node_lon(future_time) : eph.get_longitude(planet, future_time, geo)
+
+        // Future retrograde status (skip for nodes)
+        retro_tt_out_fut = geo and not is_sun and not is_any_node() and eph.is_retrograde(planet, future_time) ? "℞" : ""
+
+        // Determine future sign
+        current_future_sign = get_sign(current_value)
+
+        // Sync with historical data on first iteration
+        if not first_future_sign_checked
+            first_future_sign_checked := true
+            if current_future_sign == last_sign
+                last_sign_future := current_future_sign
+                continue
+
+        // Detect future ingress
+        cross_future = current_future_sign != last_sign_future
+        if cross_future
+            last_sign_future := current_future_sign
+
+        // Build label content
+        label_text = get_symbol(current_future_sign)
+        tooltip = degsign(current_value)
+
+        // Draw future ingress markers
+        if cross_future and get_show(current_future_sign)
+            if show_Planet_future
+                // Calculate ingress time
+                ingress_time = future_time - bar_gap
+
+                // Only draw if ingress is STRICTLY in the future (not on current bar)
+                // Historical labels already handle the "current bar" case
+                if ingress_time > time
+                    ingress_date = str.format_time(ingress_time, "MMM d, yy\nHH:mm", timezone = tz_input)
+                    line_top = close + line_height
+                    line_bottom = close - line_height
+
+                    // Color based on sign or user preference
+                    future_col = indiv_col ? get_indiv_color(current_future_sign) : planet_col
+
+                    // Draw vertical tick line
+                    new_line = line.new(ingress_time, line_bottom, ingress_time, line_top, xloc=xloc.bar_time, color=future_col, width=1, style=line.style_dotted)
+                    array.push(pl_lines, new_line)
+
+                    // Top label: retrograde + planet + sign
+                    top_label_text = retro_tt_out_fut + first_element_ + "\n" + label_text
+                    new_lab = label.new(ingress_time, line_top, top_label_text, style=label.style_text_outline, color=color.new(future_col, trans), textcolor=text_col, xloc=xloc.bar_time, size=vTxtSize, tooltip=tooltip, text_font_family=font.family_monospace)
+                    array.push(pl_labs, new_lab)
+
+                    // Bottom label: date (optional)
+                    if show_future_datetime
+                        new_lab_bottom = label.new(ingress_time, line_bottom, ingress_date, style=label.style_text_outline, color=color.new(future_col, trans), textcolor=text_col, xloc=xloc.bar_time, size=vTxtSize, tooltip=tooltip, text_font_family=font.family_monospace)
+                        array.push(pl_labs_bottom, new_lab_bottom)
+
+
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Historical Labels
+// ═══════════════════════════════════════════════════════════════════
+
+if show_Planet and cross and get_show(current_sign)
+    label_text = retro_tt_out + "\n" + first_element_ + "\n" + get_symbol(current_sign)
+    label.new(bar_index - 1, high, text=label_text, yloc=yloc.abovebar, style=label.style_text_outline, size=vTxtSize, color = bg_col, textcolor=text_col, tooltip="Ingress into " + current_sign + "\n" + degsign(long_out), text_font_family=font.family_monospace)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Alert Conditions
+// ═══════════════════════════════════════════════════════════════════
+
+status = cross and get_alert(current_sign)
+alertcondition(status, title="Planetary Ingress", message="Planetary Ingress detected")

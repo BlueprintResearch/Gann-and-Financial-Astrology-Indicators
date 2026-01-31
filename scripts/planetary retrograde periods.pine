@@ -1,0 +1,450 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • PLANETARY RETROGRADE PERIODS
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Detects and visualizes planetary retrograde motion
+//               with two-phase analysis (first half / second half) showing
+//               the midpoint of retrograde periods. Projects future retrograde
+//               periods up to 500 bars ahead with date labels.
+//
+// @author       BlueprintResearch (Javonnii)
+// @version      2.0.1
+//
+// @theory       Uses VSOP87, ELP2000-82, and Meeus algorithms via
+//               Blueprint Research ephemeris libraries for accurate
+//               geocentric speed calculations.
+//
+// @features     • Two-phase retrograde (first half / second half with midpoint)
+//               • Future retrograde projections (up to 500 bars)
+//               • Station markers: ℞ (retrograde), ½ (midpoint), D (direct)
+//               • Timezone-aware date labels
+//               • Alert conditions for station points
+//
+// @accuracy     Very accurate using speed-based detection. Retrograde detection
+//               is inherently more precise than ingress detection because speed
+//               crosses zero at a defined point. Accuracy across all planets and
+//               future projections up to 500 bars on any timeframe:
+//               - All planets (Mercury through Pluto): Within hours to ±1 day
+//               - Spot tested on Daily and Weekly charts with excellent results
+//               - For precise timing, cross-reference with JPL Horizons
+//
+// @open_source  This library is part of an open-source alternative to
+//               proprietary astronomical libraries. Study, modify, and
+//               share freely. We believe knowledge of the cosmos belongs
+//               to everyone.
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0
+// ════════════════════════════════════════════════════════════════
+//
+//@version=6
+indicator("Planetary Retrograde Periods", max_lines_count=500, max_labels_count=500, overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════
+// Library Imports
+// ═══════════════════════════════════════════════════════════════════
+import BlueprintResearch/lib_ephemeris/1 as eph
+import BlueprintResearch/lib_vsop_core/1 as core
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Planet Selection
+// ═══════════════════════════════════════════════════════════════════
+group_planet = "Planet Selection"
+
+pselect = input.string("☿ Mercury", "Select Planet",
+    options=["☿ Mercury", "♀ Venus", "♂ Mars", "♃ Jupiter", "♄ Saturn", "⛢ Uranus", "♆ Neptune", "♇ Pluto"],
+    group=group_planet,
+    tooltip="Choose planet to track retrograde motion. Sun and Moon do not retrograde from geocentric perspective.")
+
+show_half = input.bool(true, "Show Retrograde Halves",
+    group=group_planet,
+    tooltip="First half (speed increasing) and second half (speed decreasing) with different shades")
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Future Projections
+// ═══════════════════════════════════════════════════════════════════
+group_future = "Future Projections"
+
+look_ahead = input.int(250, "Bars to Look Ahead",
+    minval=1, maxval=500,
+    group=group_future,
+    tooltip="Number of future bars to scan for retrograde periods")
+
+show_future = input.bool(true, "Show Future Retrograde Lines",
+    group=group_future)
+
+show_future_datetime = input.bool(false, "Show Future Date Labels",
+    group=group_future,
+    tooltip="Display date/time and duration at future station points")
+
+tz_input = input.string("UTC", "Timezone for Future Dates",
+    options=["America/Adak", "America/Los_Angeles", "America/Denver", "America/Chicago",
+             "America/New_York", "UTC", "Europe/Paris", "Europe/Moscow",
+             "Asia/Kolkata", "Asia/Singapore"],
+    group=group_future,
+    tooltip="Timezone for formatting future date labels")
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Display Settings
+// ═══════════════════════════════════════════════════════════════════
+group_display = "Display Settings"
+
+iTxtSize = input.string("Normal", "Label Size",
+    options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"],
+    group=group_display)
+
+vTxtSize = switch iTxtSize
+    "Auto"   => size.auto
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+    "Huge"   => size.huge
+
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs - Colors
+// ═══════════════════════════════════════════════════════════════════
+group_col = "Planet Colors"
+
+mercury_color = input.color(color.rgb(255, 140, 0), "Mercury", group=group_col)
+venus_color   = input.color(color.rgb(0, 255, 0), "Venus", group=group_col)
+mars_color    = input.color(color.rgb(255, 0, 0), "Mars", group=group_col)
+jupiter_color = input.color(color.rgb(255, 255, 0), "Jupiter", group=group_col)
+saturn_color  = input.color(color.rgb(192, 192, 192), "Saturn", group=group_col)
+uranus_color  = input.color(color.rgb(0, 191, 255), "Uranus", group=group_col)
+neptune_color = input.color(color.rgb(255, 0, 255), "Neptune", group=group_col)
+pluto_color   = input.color(color.rgb(255, 255, 255), "Pluto", group=group_col)
+
+station_color = input.color(color.yellow, "Stationary Point Marker", group=group_col)
+
+text_col = input.color(
+     #000000,
+     "Label Text Color",
+     tooltip="Black for dark backgrounds, try white (#FFFFFF) for light charts",
+     group=group_col)
+
+transp_first = input.int(55, "First Half Transparency", minval=0, maxval=100, group=group_col,
+    tooltip="Transparency for first half of retrograde (speed becoming more negative)")
+transp_second = input.int(20, "Second Half Transparency", minval=0, maxval=100, group=group_col,
+    tooltip="Transparency for second half of retrograde (speed returning to zero)")
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Get color for selected planet
+get_planet_color() =>
+    switch pselect
+        "☿ Mercury" => mercury_color
+        "♀ Venus"   => venus_color
+        "♂ Mars"    => mars_color
+        "♃ Jupiter" => jupiter_color
+        "♄ Saturn"  => saturn_color
+        "⛢ Uranus"  => uranus_color
+        "♆ Neptune" => neptune_color
+        "♇ Pluto"   => pluto_color
+        => color.gray
+
+// Get planet symbol
+get_planet_symbol() =>
+    str.substring(pselect, 0, 1)
+
+// Convert planet input string to library enum
+get_planet_enum() =>
+    switch pselect
+        "☿ Mercury" => eph.Planet.Mercury
+        "♀ Venus"   => eph.Planet.Venus
+        "♂ Mars"    => eph.Planet.Mars
+        "♃ Jupiter" => eph.Planet.Jupiter
+        "♄ Saturn"  => eph.Planet.Saturn
+        "⛢ Uranus"  => eph.Planet.Uranus
+        "♆ Neptune" => eph.Planet.Neptune
+        "♇ Pluto"   => eph.Planet.Pluto
+        => eph.Planet.Mercury
+
+// Get average retrograde duration in days (for estimates)
+get_avg_duration() =>
+    switch pselect
+        "☿ Mercury" => 24
+        "♀ Venus"   => 42
+        "♂ Mars"    => 72
+        "♃ Jupiter" => 120
+        "♄ Saturn"  => 138
+        "⛢ Uranus"  => 151
+        "♆ Neptune" => 158
+        "♇ Pluto"   => 160
+        => 60
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Core Retrograde Detection
+// ═══════════════════════════════════════════════════════════════════
+
+// Get planet enum and color
+planet = get_planet_enum()
+col_out = get_planet_color()
+
+// Get current and previous speed from library (degrees per day)
+// Negative speed = retrograde motion
+speed = eph.get_speed(planet, time)
+prev_speed = eph.get_speed(planet, time[1])
+
+// Retrograde detection
+is_retrograde = eph.is_retrograde(planet, time)
+was_retrograde = eph.is_retrograde(planet, time[1])
+
+// Calculate bar duration for alignment offset
+bar_gap_ms = timeframe.in_seconds(timeframe.period) * 1000
+
+// Check retrograde at bar close for bgcolor alignment with future projections
+// This ensures bgcolor starts on the same bar the future projection line disappears
+is_retrograde_aligned = eph.is_retrograde(planet, time + bar_gap_ms)
+speed_aligned = eph.get_speed(planet, time + bar_gap_ms)
+prev_speed_aligned = eph.get_speed(planet, time)
+
+// Stationary point detection (speed crosses zero)
+crossing_to_retro = not na(prev_speed) and prev_speed >= 0 and speed < 0
+crossing_to_direct = not na(prev_speed) and prev_speed < 0 and speed >= 0
+
+// Aligned crossing detection (bar close timing) for sync with future projections
+crossing_to_retro_aligned = not na(prev_speed_aligned) and prev_speed_aligned >= 0 and speed_aligned < 0
+crossing_to_direct_aligned = not na(prev_speed_aligned) and prev_speed_aligned < 0 and speed_aligned >= 0
+
+// Track historical retrograde start time for midpoint calculation
+// Using both regular and aligned versions
+var int historical_retro_start = na
+var int historical_retro_start_aligned = na
+
+if crossing_to_retro
+    historical_retro_start := time
+if crossing_to_direct
+    historical_retro_start := na
+
+if crossing_to_retro_aligned
+    historical_retro_start_aligned := time
+if crossing_to_direct_aligned
+    historical_retro_start_aligned := na
+
+// Two-phase retrograde detection (first half / second half)
+// First half: speed becoming more negative (magnitude increasing)
+// Second half: speed returning toward zero (magnitude decreasing)
+// Using is_retrograde_aligned to match future projection line timing exactly
+first_half = false
+second_half = false
+
+if is_retrograde_aligned and not na(prev_speed_aligned) and not na(speed_aligned)
+    // Both speeds should be negative for proper phase detection
+    if prev_speed_aligned < 0 and speed_aligned < 0
+        was_decreasing = speed_aligned < prev_speed_aligned  // Speed becoming more negative
+        first_half := was_decreasing
+        second_half := not was_decreasing
+    else if speed_aligned < 0
+        // First bar of retrograde (prev was positive, current is negative)
+        first_half := true
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Historical Visualization - Background Colors
+// ═══════════════════════════════════════════════════════════════════
+
+// Apply two-phase background colors (first half / second half)
+// Note: bgcolor must be at global scope - conditions go inside the function
+// Using is_retrograde_aligned for exact sync with future projection line disappearance
+bgcolor(show_half and first_half ? color.new(col_out, transp_first) : na)
+bgcolor(show_half and second_half ? color.new(col_out, transp_second) : na)
+
+// Single color when halves disabled
+bgcolor(not show_half and is_retrograde_aligned ? color.new(col_out, transp_first) : na)
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projections (Clean pattern from ingress script)
+// ═══════════════════════════════════════════════════════════════════
+
+// State variables for future projection tracking
+var bool last_future_retro = false
+var bool first_future_checked = false
+var array<line> pl_lines = array.new<line>()
+var array<label> pl_labs = array.new<label>()
+var array<label> pl_labs_bottom = array.new<label>()
+
+// Midpoint tracking variables
+var int retro_start_time = na
+var array<line> pl_midlines = array.new<line>()
+var array<label> pl_midlabs = array.new<label>()
+
+// Calculate proportional line height
+line_height = ta.atr(14) * 2
+
+// Project future retrograde on last bar
+if show_future and (barstate.islast or barstate.isrealtime)
+    // ═══ CLEANUP ALL PREVIOUS MARKERS ═══
+    for ln in pl_lines
+        line.delete(ln)
+    array.clear(pl_lines)
+    for lb in pl_labs
+        label.delete(lb)
+    array.clear(pl_labs)
+    for lb in pl_labs_bottom
+        label.delete(lb)
+    array.clear(pl_labs_bottom)
+    for ln in pl_midlines
+        line.delete(ln)
+    array.clear(pl_midlines)
+    for lb in pl_midlabs
+        label.delete(lb)
+    array.clear(pl_midlabs)
+
+    bar_gap_seconds = timeframe.in_seconds(timeframe.period)
+    bar_gap = bar_gap_seconds * 1000
+
+    // Reset state for fresh scan each bar
+    first_future_checked := false
+    last_future_retro := is_retrograde  // Sync with current state
+    // Only reset retro_start_time if NOT in retrograde (preserve it during retrograde)
+    if not is_retrograde
+        retro_start_time := na
+
+    for i = 1 to look_ahead
+        future_time = time + (bar_gap * i)
+
+        // Get future speed from library
+        future_speed = eph.get_speed(planet, future_time)
+        future_retro = future_speed < 0
+
+        // Sync with historical data on first iteration
+        if not first_future_checked
+            first_future_checked := true
+            last_future_retro := future_retro
+            continue
+
+        // Detect station points (retrograde state changes)
+        station_retro_future = not last_future_retro and future_retro
+        station_direct_future = last_future_retro and not future_retro
+
+        if station_retro_future or station_direct_future
+            last_future_retro := future_retro
+
+            // Calculate position
+            station_time = future_time - bar_gap
+
+            // Only draw if event is truly in the future
+            if station_time > time
+                line_top = close + line_height
+                line_bottom = close - line_height
+
+                // Determine station type and color
+                station_symbol = station_retro_future ? "℞" : "D"
+                marker_color = station_retro_future ? station_color : color.lime
+
+                // Draw vertical tick line
+                new_line = line.new(station_time, line_bottom, station_time, line_top,
+                    xloc=xloc.bar_time,
+                    color=marker_color,
+                    width=1,
+                    style=line.style_dotted)
+                array.push(pl_lines, new_line)
+
+                // Top label: station marker with planet symbol
+                top_label_text = get_planet_symbol() + "\n" + station_symbol
+                new_lab = label.new(station_time, line_top, top_label_text,
+                    style=label.style_text_outline,
+                    color=color.new(marker_color, 20),
+                    textcolor=text_col,
+                    xloc=xloc.bar_time,
+                    size=vTxtSize,
+                    text_font_family=font.family_monospace)
+                array.push(pl_labs, new_lab)
+
+                // Bottom label: date (optional)
+                if show_future_datetime
+                    station_date = str.format_time(station_time, "MMM d, yy\nHH:mm", timezone=tz_input)
+                    new_lab_bottom = label.new(station_time, line_bottom, station_date,
+                        style=label.style_text_outline,
+                        color=color.new(marker_color, 20),
+                        textcolor=text_col,
+                        xloc=xloc.bar_time,
+                        size=vTxtSize,
+                        text_font_family=font.family_monospace)
+                    array.push(pl_labs_bottom, new_lab_bottom)
+
+                // Track retrograde start time for midpoint calculation
+                if station_retro_future
+                    retro_start_time := station_time
+
+            // Draw midpoint marker when retrograde ends
+            // Use historical_retro_start_aligned if we're in retrograde and retro_start_time is na
+            effective_retro_start = not na(retro_start_time) ? retro_start_time : historical_retro_start_aligned
+            if station_direct_future and not na(effective_retro_start)
+                midpoint_time = int((effective_retro_start + station_time) / 2)
+
+                // Only draw midpoint if it's in the future
+                if midpoint_time > time
+                    mid_line_height = line_height * 0.5
+                    mid_line_top = close + mid_line_height
+                    mid_line_bottom = close - mid_line_height
+
+                    // Draw shorter midpoint line
+                    new_midline = line.new(midpoint_time, mid_line_bottom, midpoint_time, mid_line_top,
+                        xloc=xloc.bar_time,
+                        color=col_out,
+                        width=1,
+                        style=line.style_dotted)
+                    array.push(pl_midlines, new_midline)
+
+                    // Midpoint label with planet symbol and ½
+                    mid_label_text = get_planet_symbol() + "\n½"
+                    new_midlab = label.new(midpoint_time, mid_line_top, mid_label_text,
+                        style=label.style_text_outline,
+                        color=color.new(col_out, 20),
+                        textcolor=text_col,
+                        xloc=xloc.bar_time,
+                        size=vTxtSize,
+                        text_font_family=font.family_monospace)
+                    array.push(pl_midlabs, new_midlab)
+
+                // Reset for next retrograde period
+                retro_start_time := na
+
+        else
+            // Update state without drawing
+            last_future_retro := future_retro
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Alert Conditions
+// ═══════════════════════════════════════════════════════════════════
+
+// Static alertconditions (message must be const string)
+alertcondition(crossing_to_retro,
+    title="Station Retrograde",
+    message="Planet has stationed retrograde")
+
+alertcondition(crossing_to_direct,
+    title="Station Direct",
+    message="Planet has stationed direct")
+
+alertcondition(crossing_to_retro or crossing_to_direct,
+    title="Any Station Point",
+    message="Planet station point detected")
+
+// Dynamic alerts with planet name (fires when condition is true)
+if crossing_to_retro
+    alert(pselect + " has stationed retrograde on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if crossing_to_direct
+    alert(pselect + " has stationed direct on " + syminfo.ticker, alert.freq_once_per_bar_close)

@@ -1,0 +1,585 @@
+//       █████████████████
+//        ███████████████
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//           ██     ██
+//        🦁           🦁
+
+//@version=6
+// SPDX-License-Identifier: CC-BY-NC-SA-4.0 AND MPL-2.0
+//
+// This source code contains original work by [Javonnii] licensed under
+// the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0).
+// Full license text: https://creativecommons.org/licenses/by-nc-sa/4.0/
+//
+// Portions of this script include code from:
+// - @BarefootJoey (MPL-2.0)
+// - @faiyaz7283 (MPL-2.0)
+//
+// The above components remain licensed under the Mozilla Public License 2.0 (MPL-2.0).
+// Full license text: https://mozilla.org/MPL/2.0/
+//
+// Licensing Breakdown:
+// - Any original work by [Javonnii] is licensed under CC BY-NC-SA 4.0, meaning it may not be used for commercial purposes.
+// - Any modifications, improvements, or forks of this script must include clear attribution to the original author ([Javonnii]).
+// - @BarefootJoey’s and @faiyaz7283’s code remain under MPL-2.0 and must adhere to its terms.
+//
+// Redistribution & Usage:
+// - If redistributing, a link to the original source must be provided.
+// - Any derivative works must retain this notice and follow the respective licensing rules.
+//
+// Author: [Javonnii]
+
+
+
+indicator("Bradley Siderograph: Blueprint_So9", scale = scale.left, overlay = true, max_labels_count = 500) 
+
+
+import faiyaz7283/tools/15 as tools
+import faiyaz7283/printer/10 as prnt
+import faiyaz7283/multidata/12 as mltd
+import faiyaz7283/Gauge/6 as gge
+import BarefootJoey/AstroLib/1 as AL
+
+// Tooltip variables for the indicator - Friendly reminders
+var string tooltip_potential = "Sidereal Potential (P): Represents the combined influence of long-term trends (L), the declination factor (D), and middle-term trends (M). Adjusted with a multiplier (X) for better comparison to market indices."
+var string tooltip_long_terms = "Long Terms (L): Reflect the primary, overarching trends in the market. Comparable to the 'tide' in the surf analogy of market movements."
+var string tooltip_declination = "Declination Factor (D): A component that enhances the long-term trends by accounting for planetary declinations. Included in the weighted long-term base."
+var string tooltip_middle_terms = "Middle Terms (M): Represent intermediate, shorter-term fluctuations within the primary trend. Comparable to the 'waves' in the surf analogy."
+var string tooltip_short_terms = "Short Terms: Reflect daily or very short-term fluctuations, comparable to 'ripples and splashes' in the surf analogy. These are typically too transient to affect broader trends."
+var string tooltip_multiplier = "Multiplier (X): Amplifies the long-term component (L + D) for clearer alignment with stock market indices. Experiment with values like 3x, 4x, or 5x to find the optimal adjustment."
+var string tooltip_aspectivity = "Line of Aspectivity: A graph showing the relative strength of good and adverse planetary aspects at a given time. It can provide guidance for understanding market psychology or planning activities."
+var string tooltip_rate_of_change = "Rate of Change: Tracks how quickly the potential is rising or falling. Falling rates are linked to increased accidents or errors, while rising rates suggest enhanced confidence and control."
+var string tooltip_dow_comparison = "Dow Theory Comparison: Long Terms (L) correspond to primary trends, Middle Terms (M) to secondary reactions, and Short Terms to daily fluctuations."
+
+
+gt = time
+
+
+htz = 0
+mtz = 0
+tz = htz + math.round(mtz / 60, 4)
+latitude = 0
+longitude = 0
+orb = input.float(15.0, "Aspect Orb (+/- °)", minval=0, maxval=15)
+geo = input.bool(true, "Geocentric?", tooltip="Leave this box unchecked for heliocentric.")
+geoout = geo ? 0 : 1
+smoothing = input.int(5, "Smoothing period")
+show_sidereal = input(true, "Show Sidereal Potential", tooltip = tooltip_potential)
+show_long = input.bool(false, "Show Long Term Curve", tooltip = tooltip_long_terms)
+show_mid = input.bool(false, "Show Mid Term Curve", tooltip = tooltip_middle_terms)
+show_dec = input.bool(false, "Show Mars Venus Declination", tooltip = tooltip_declination)
+long_term_col = input.color(color.aqua, "Long Term")
+mid_term_col = input.color(color.lime, "Mid Term")
+sideral_col = input.color(#ff8c69, "Potential")
+multiplier = input.float(1.0, "X multiplier for Long Term", tooltip = tooltip_multiplier)
+show_high_low = input.bool(true, "Show/Hide Potential's Annual High & Low")
+nudge = 0
+ 
+sym = true 
+
+day = AL.J2000(AL.JDN(gt, 0, tz))
+dayr = AL.J2000(AL.JDN(gt, 1, tz))
+
+
+var section01 = 'Gauge Settings'
+//---------------------:
+
+var displayLoc = input.string(defval = position.top_right, title = 'Display Location', options = [position.top_left, 
+  position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, 
+  position.bottom_left, position.bottom_center, position.bottom_right], group = section01)
+
+var cellPad = input.int(defval = 1, title = 'Cell Spacing', minval = 0, maxval = 5, group = section01)
+
+var orientation = input.string(defval = 'vertical', title = 'Orientation',  options = ['horizontal', 'vertical'], 
+  group = section01) == 'vertical' ? false : true 
+
+var grdUp = input.color(defval = #00FF00, title = '⬆ Max', inline = 'grdnt', group = section01)
+
+var grdNeutral = input.color(defval = #fff9c4, title = '⮕ Neutral', inline = 'grdnt', group = section01)
+
+var grdDown = input.color(defval = #FF0000, title = '⬇ Min', inline = 'grdnt', group = section01)
+
+var titleColor = input.color(defval = #ffe0b2, title = 'Title:\tText', inline = 'ttlCl', group = section01)
+
+var titleBgColor = input.color(defval = #1E283273, title = 'Bg', inline = 'ttlCl', group = section01)
+
+var titleSize = input.string(defval=size.auto, title = 'Size', options = ['hide', size.auto, size.tiny, size.small, 
+  size.normal, size.large, size.huge], inline = 'ttlCl', group = section01)
+
+var titleAlign = input.string(defval=text.align_center, title = 'Align', 
+  options = [text.align_left, text.align_center, text.align_right], inline = 'ttlCl', group = section01)
+
+var labelColor = input.color(defval = #00e3ff, title = 'Label:\tColor', inline = 'lblCl', group = section01)
+
+var labelSize = input.string(defval=size.auto, title = 'Size', options = ['hide', size.auto, size.tiny, size.small, 
+  size.normal, size.large, size.huge], inline = 'lblCl', group = section01)
+
+var keySize = input.string(defval=size.auto, title = 'Percentage Size', options = ['hide', size.auto, size.tiny, size.small, 
+  size.normal, size.large, size.huge], inline = 'prcCl', group = section01)
+
+var offColor = input.color(defval = #0098E736, title = 'Inactive Color', inline = 'inctCl', group = section01)
+
+var size = input.int(defval = 10, title = 'Gauge Size', minval = 5, maxval = 20, group = section01)
+
+var format = '{0,number,#,###,###,###,##0.00########}'
+
+
+iTxtSize=input.string("Small", title="Text Size", options=["Auto", "Tiny", "Small", "Normal", "Large"], group="Info", inline="1")
+vTxtSize=iTxtSize == "Auto" ? size.auto : iTxtSize == "Tiny" ? size.tiny : iTxtSize == "Small" ? size.small : iTxtSize == "Normal" ? size.normal : iTxtSize == "Large" ? size.large : size.small
+
+// Initialize an array for storing Long Term planetary angular relationships
+var float[] MidTermAspectValues = array.new_float()
+var float[] LongTermAspectValues = array.new_float()
+
+var LongTermPlanetPairNames = array.new_string(0)
+var MidTermPlanetPairNames = array.new_string(0)
+
+var ShortTermPlanetPairNames = array.new_string(0)
+var float[] ShortTermAspectValues = array.new_float()
+
+// Initialize persistent variables to store the min and max
+var float minFromStart = na
+var float maxFromStart = na
+
+var float minFromStartLongterms = na
+var float maxFromStartLongterms = na
+
+var float minFromStartMidterms = na
+var float maxFromStartMidterms = na
+
+// Reset summation at the beginning of each bar for bar-specific calculations
+var float summation = 0.0
+var float mid_summation = 0.0
+var float short_summation = 0.0
+summation := 0.0
+mid_summation := 0.0
+short_summation := 0.0
+var float combo_dec = 0.0
+var float mer_Dec_ = 0.0
+
+
+// Linear interpolation function
+linearInterp(x, x1, x2, y1, y2) =>
+    // Handles linear interpolation between (x1, y1) and (x2, y2)
+    y1 + (y2 - y1) * ((x - x1) / (x2 - x1))
+
+// Step-based weighting with linear interpolation
+calculateWeightStepBased(_p1p2, _aspectAngle, _orb) =>
+    distanceToCulmination = math.abs(_p1p2 - _aspectAngle)
+
+    // 1) Outside orb: Weight is 0
+    if distanceToCulmination > _orb
+        0.0
+
+    // 2) Exact culmination (0°): Weight is 10
+    else if distanceToCulmination == 0
+        10.0
+
+    // 3) Between 0° and 5°: Interpolate from 10 to 7.5
+    else if distanceToCulmination <= 5
+        linearInterp(distanceToCulmination, 0, 5, 10, 7.5)
+
+    // 4) Between 5° and 10°: Interpolate from 7.5 to 2.5
+    else if distanceToCulmination <= 10
+        linearInterp(distanceToCulmination, 5, 10, 7.5, 2.5)
+
+    // 5) Between 10° and orb: Interpolate from 2.5 to 0
+    else
+        linearInterp(distanceToCulmination, 10, _orb, 2.5, 0)
+
+
+// // Step-based weighting
+// calculateWeightStepBased(_p1p2, _aspectAngle, _orb) =>
+//     distanceToCulmination = math.abs(_p1p2 - _aspectAngle)
+//     _potential = 0.0
+
+//     // 1) outside orb => 0
+//     if distanceToCulmination > _orb
+//         _potential := 0.0
+
+//     // 2) exactly 0 => 10
+//     else if distanceToCulmination == 0
+//         _potential := 10.0
+
+//     // 3) ≤ 5 => 7.5
+//     else if distanceToCulmination <= 5
+//         _potential := 7.5
+
+//     // 4) ≤ 10 => 2.5
+//     else if distanceToCulmination <= 10
+//         _potential := 2.5
+
+//     // 5) For 10 < distance ≤ orb, maybe 1.0
+//     else
+//         _potential := 1.0
+
+//     _potential
+
+
+getAspectType(_angleDiff, _orb) =>
+    // Return a string or an enum of which aspect is in play
+    // We'll do a simplified version using standard angles:
+    //   - conjunction = 0
+    //   - sextile = 60
+    //   - square = 90
+    //   - trine = 120
+    //   - opposition = 180
+    // Check whether p1p2 is within ± orb of each exact angle
+    // (Note that you might want to wrap angles >180 as 360-angle, etc.)
+
+    conjunctionActive  =  _angleDiff <= (0 + _orb)
+    sextileActive      =  (_angleDiff >= (60 - _orb))  and (_angleDiff <= (60 + _orb))
+    squareActive       =  (_angleDiff >= (90 - _orb))  and (_angleDiff <= (90 + _orb))
+    trineActive        =  (_angleDiff >= (120 - _orb)) and (_angleDiff <= (120 + _orb))
+    oppositionActive   =  (_angleDiff >= (180 - _orb)) 
+
+    // Return a textual label for the aspect or "none"
+    conjunctionActive  ? "conjunction" :
+      sextileActive    ? "sextile" :
+      squareActive     ? "square" :
+      trineActive      ? "trine" :
+      oppositionActive ? "opposition" : "none"
+
+
+
+valency(planetPair) =>
+    switch planetPair
+        // Long Terms 
+        // Jupiter Conjunctions
+        "Saturn-Jupiter" => -1
+        "Uranus-Jupiter" => -1
+        "Neptune-Jupiter" => 1
+        "Pluto-Jupiter" => -1
+        // Saturn Conjunctions
+        "Uranus-Saturn" => -1
+        "Neptune-Saturn" => -1
+        "Pluto-Saturn" => -1
+        // Uranus Conjunctions
+        "Neptune-Uranus" => -1
+        "Pluto-Uranus" => -1
+        // Neptune Conjunctions
+        "Pluto-Neptune" => -1
+
+        // Mid Terms 
+        "Venus-Mercury" => 1
+        "Mars-Mercury" => -1
+        "Jupiter-Mercury" => 1
+        "Saturn-Mercury" => -1
+        "Uranus-Mercury" => 1
+        "Neptune-Mercury" => 1
+        "Pluto-Mercury" => -1
+        "Mars-Venus" => -1
+        "Jupiter-Venus" => 1
+        "Saturn-Venus" => -1
+        "Uranus-Venus" => 1
+        "Neptune-Venus" => 1
+        "Pluto-Venus" => 1
+        "Mercury-Sun" => 1
+        "Venus-Sun" => 1
+        "Mars-Sun" => -1
+        "Jupiter-Sun" => 1
+        "Saturn-Sun" => -1
+        "Uranus-Sun" => 1
+        "Neptune-Sun" => -1
+        "Pluto-Sun" => -1
+        "Jupiter-Mars" => -1
+        "Saturn-Mars" => -1
+        "Uranus-Mars" => -1
+        "Neptune-Mars" => -1
+        "Pluto-Mars" => -1
+
+
+/// MID TERM 
+// Recalculated angular relationships with AL.AngToCirc applied
+//@BarefootJoey (MPL-2.0)
+venumerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz))))
+marsmerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+jupimerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+satumerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+uranmerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz))))
+neptmerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz))))
+plutmerc = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz))))
+
+// Venus aspects
+marsvenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+jupivenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+satuvenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+uranvenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz))))
+neptvenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz))))
+plutvenu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz))))
+
+// Sun aspects
+mercsun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(1, geoout, day, dayr, latitude, longitude, tz))))
+venusun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(2, geoout, day, dayr, latitude, longitude, tz))))
+marssun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+jupisun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+satusun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+uransun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz))))
+neptsun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz))))
+plutsun = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getsun(geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz))))
+
+// Mars aspects
+jupimars = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+satumars = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+uranmars = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+neptmars = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+plutmars = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(4, geoout, day, dayr, latitude, longitude, tz))))
+
+
+/// LONG TERM 
+satujupi = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+uranjupi = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+neptjupi = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+plutjupi = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(5, geoout, day, dayr, latitude, longitude, tz))))
+
+uransatu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+neptsatu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+plutsatu = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(6, geoout, day, dayr, latitude, longitude, tz))))
+
+nepturan = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz))))
+pluturan = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(7, geoout, day, dayr, latitude, longitude, tz))))
+
+plutnept = math.abs(AL.degtolowest180(AL.AngToCirc(AL.getplanet(9, geoout, day, dayr, latitude, longitude, tz) - AL.getplanet(8, geoout, day, dayr, latitude, longitude, tz))))
+//@BarefootJoey (MPL-2.0)
+
+//@BarefootJoey (MPL-2.0)
+// Declination Factor  Mar and Venus
+Mars_Dec = AL.getplanet(4, 3, day, dayr, latitude, longitude, tz)
+Ven_Dec = AL.getplanet(2, 3, day, dayr, latitude, longitude, tz)
+mer_Dec = AL.getplanet(1, 3, day, dayr, latitude, longitude, tz)
+//@BarefootJoey (MPL-2.0)
+
+
+
+mer_Dec_ := (Mars_Dec + mer_Dec) / 2
+combo_dec := (Mars_Dec + Ven_Dec) / 2
+// combo_dec = mer_Dec * -1
+
+
+
+// Reset and repopulate arrays on each bar
+array.clear(LongTermAspectValues)
+array.clear(LongTermPlanetPairNames)
+array.clear(MidTermAspectValues)
+array.clear(MidTermPlanetPairNames)
+
+
+// Mid Terms Data
+midTermAspects = array.from(venumerc,marsmerc, jupimerc, satumerc, uranmerc, neptmerc, plutmerc,marsvenu, jupivenu, satuvenu, uranvenu, neptvenu, plutvenu, mercsun, venusun, marssun, jupisun, satusun, uransun, neptsun, plutsun, jupimars, satumars, uranmars, neptmars, plutmars)
+
+
+midTermNames = array.from("Venus-Mercury", "Mars-Mercury", "Jupiter-Mercury", "Saturn-Mercury", "Uranus-Mercury", "Neptune-Mercury", "Pluto-Mercury", "Mars-Venus", "Jupiter-Venus", "Saturn-Venus", "Uranus-Venus", "Neptune-Venus", "Pluto-Venus", "Mercury-Sun", "Venus-Sun", "Mars-Sun", "Jupiter-Sun", "Saturn-Sun", "Uranus-Sun", "Neptune-Sun", "Pluto-Sun", "Jupiter-Mars", "Saturn-Mars", "Uranus-Mars", "Neptune-Mars", "Pluto-Mars")
+
+
+
+for i = 0 to array.size(midTermAspects) - 1
+    array.push(MidTermAspectValues, array.get(midTermAspects, i))
+    array.push(MidTermPlanetPairNames, array.get(midTermNames, i))
+
+
+// Long Terms Data
+longTermAspects = array.from(satujupi, uranjupi, neptjupi, plutjupi, uransatu, neptsatu, plutsatu, nepturan, pluturan, plutnept)
+
+longTermNames = array.from("Saturn-Jupiter", "Uranus-Jupiter", "Neptune-Jupiter", "Pluto-Jupiter", "Uranus-Saturn", "Neptune-Saturn", "Pluto-Saturn", "Neptune-Uranus", "Pluto-Uranus", "Pluto-Neptune")
+
+
+for i = 0 to array.size(longTermAspects) - 1
+    array.push(LongTermAspectValues, array.get(longTermAspects, i))
+    array.push(LongTermPlanetPairNames, array.get(longTermNames, i))
+
+
+// Calculate summation for the current bar
+var int valancy = na 
+if array.size(LongTermAspectValues) > 0 and array.size(LongTermPlanetPairNames) > 0
+    for i = 0 to array.size(LongTermAspectValues) - 1
+        pairAspAng = array.get(LongTermAspectValues, i)
+        pair_name = array.get(LongTermPlanetPairNames, i)
+
+        aspect_type = getAspectType(pairAspAng, orb)  // Replace with your function
+
+        if aspect_type == "square"
+            valancy := -1
+            summation += calculateWeightStepBased(pairAspAng, 90, orb) * valancy
+        else if aspect_type == "opposition"
+            valancy := -1
+            summation += calculateWeightStepBased(pairAspAng, 180, orb) * valancy
+        else if aspect_type == "trine"
+            valancy := 1
+            summation += calculateWeightStepBased(pairAspAng, 120, orb) * valancy
+        else if aspect_type == "sextile"
+            valancy := 1
+            summation += calculateWeightStepBased(pairAspAng, 60, orb) * valancy
+
+        else if aspect_type == "conjunction"
+            valancy := valency(pair_name)
+            summation += calculateWeightStepBased(pairAspAng, 0, orb) * valancy
+
+
+var int valancy_mid = na 
+if array.size(MidTermAspectValues) > 0 and array.size(MidTermPlanetPairNames) > 0 
+    for m = 0 to array.size(MidTermAspectValues) - 1
+        pairAspAng_mid = array.get(MidTermAspectValues, m)
+        pair_name_mid = array.get(MidTermPlanetPairNames, m)
+
+        aspect_type_mid = getAspectType(pairAspAng_mid, orb)  // Replace with your function
+
+        if aspect_type_mid == "square"
+            valancy_mid := -1
+            mid_summation += calculateWeightStepBased(pairAspAng_mid, 90, orb) * valancy_mid
+        else if aspect_type_mid == "opposition"
+            valancy_mid := -1
+            mid_summation += calculateWeightStepBased(pairAspAng_mid, 180, orb) * valancy_mid
+        else if aspect_type_mid == "trine"
+            valancy_mid := 1
+            mid_summation += calculateWeightStepBased(pairAspAng_mid, 120, orb) * valancy_mid
+        else if aspect_type_mid == "sextile"
+            valancy_mid := 1
+            mid_summation += calculateWeightStepBased(pairAspAng_mid, 60, orb) * valancy_mid
+
+        else if aspect_type_mid == "conjunction"
+            valancy_mid := valency(pair_name_mid)
+            mid_summation += calculateWeightStepBased(pairAspAng_mid, 0, orb) * valancy_mid
+
+
+// Apply a fast-moving average to smooth the summation
+// Adjust this value for faster or slower smoothing
+smoothed_summation = ta.ema(summation, smoothing)
+long_terms = summation + combo_dec
+
+
+// P = X(L + D) + M 
+sideral_potential = multiplier * (smoothed_summation + combo_dec) + mid_summation
+
+plot(show_long ? summation + combo_dec : na, color= long_term_col, style = plot.style_line, linewidth = 2)
+plot(show_mid ? mid_summation : na, color = mid_term_col, style = plot.style_line, linewidth = 2)
+plot(show_sidereal ? sideral_potential : na, color = sideral_col, style = plot.style_line, linewidth = 2)
+plot(show_dec ? combo_dec : na , color = color.new(color.white, 71), style = plot.style_circles)
+
+
+// Initialize variables for high and low
+var float currentYearHigh = na
+var float currentYearLow = na
+
+
+// Initialize line variables
+var line highLine = na
+var line lowLine = na
+var label highLab = na
+var label lowLab = na
+
+
+// Potential Annual High/Low
+if show_high_low
+
+    // Get the start of the current year
+    startOfYear = timestamp(year(timenow), 1, 1, 0, 0)
+
+    // Track if a bar is within the current year
+    isCurrentYear = (time >= startOfYear)
+
+    // Initialize variables
+    var int yearStartBar = na  // Bar index at the start of the year
+
+    // Detect the first bar of the year
+    if isCurrentYear and na(yearStartBar)
+        yearStartBar := bar_index
+
+    // Update the high and low dynamically for the current year
+    if isCurrentYear
+        currentYearHigh := na(currentYearHigh) ? sideral_potential : math.max(currentYearHigh, sideral_potential)
+        currentYearLow := na(currentYearLow) ? sideral_potential : math.min(currentYearLow, sideral_potential)
+
+    // Draw horizontal lines for the current year high and low
+    if not na(currentYearHigh) 
+        highLine := line.new(x1=yearStartBar, y1=currentYearHigh, x2=bar_index, y2=currentYearHigh, color=color.green, width=1, style=line.style_solid)
+        highLab := label.new(yearStartBar, currentYearHigh, text = "Yr High", color = color.new(color.aqua, 100), textcolor = sideral_col, style = label.style_label_right)
+        label.delete(highLab[1])
+        line.delete(highLine[1])
+
+    if not na(currentYearLow) 
+        lowLine := line.new(x1=yearStartBar, y1=currentYearLow, x2=bar_index, y2=currentYearLow, color=color.red, width=1, style=line.style_solid)
+        lowLab := label.new(yearStartBar, currentYearLow, text = "Yr Low", color = color.new(color.aqua, 100), textcolor = sideral_col, style = label.style_label_right)
+        label.delete(lowLab[1])
+        line.delete(lowLine[1])
+
+
+
+// Data gathering for gauge 
+minFromStart := na(minFromStart) ? sideral_potential : math.round(math.min(minFromStart, sideral_potential), 1)
+maxFromStart := na(maxFromStart) ? sideral_potential : math.round(math.max(maxFromStart, sideral_potential), 1)
+
+minFromStartLongterms := na(minFromStartLongterms) ? long_terms : math.round(math.min(minFromStartLongterms, long_terms), 1)
+maxFromStartLongterms := na(maxFromStartLongterms) ? long_terms : math.round(math.max(maxFromStartLongterms, long_terms), 1)
+
+minFromStartMidterms := na(minFromStartMidterms) ? mid_summation : math.round(math.min(minFromStartMidterms, mid_summation), 1)
+maxFromStartMidterms := na(maxFromStartMidterms) ? mid_summation : math.round(math.max(maxFromStartMidterms, mid_summation), 1)
+
+
+
+
+//@faiyaz7283 (MPL-2.0)
+/// Gauge
+
+// Add a label at the last bar
+var label long = na 
+var label mid = na 
+var label Potn = na 
+var label dec = na 
+var label short = na 
+
+if barstate.islast
+    tbs = prnt.tableStyle.new(bgColor=na, frameColor=na, borderColor=na, borderWidth=cellPad)
+    printer = prnt.printer(stack=orientation, loc=displayLoc, tableStyle=tbs, gutterStyle=prnt.gutterStyle.new(true, 1, 1))
+    prms = gge.gaugeParams.new(num=0, min=0, max=0, size=size, offColor=offColor, upColor=grdUp, downColor=grdDown, neutralColor=grdNeutral, titleColor=titleColor, titleBgColor=titleBgColor, labelColor=labelColor, titleAlign=titleAlign, titleSize=titleSize, keySize=keySize, labelSize=labelSize, horizontal=orientation)
+
+    if show_sidereal
+        paramsAT = gge.gaugeParams.copy(prms)
+        paramsAT.num := sideral_potential
+        paramsAT.min := minFromStart
+        paramsAT.max := maxFromStart
+        paramsAT.title := 'Sidereal Potential'
+        paramsAT.minLabel := str.format(format, minFromStart)
+        paramsAT.maxLabel := str.format(format, maxFromStart)
+        printer.gauge(paramsAT)
+        Potn := label.new(bar_index, sideral_potential, "Potential", style=label.style_label_left, color= color.new(sideral_col, 100), textcolor = sideral_col, tooltip =  tooltip_potential)
+        label.delete(Potn[1])
+
+    if show_long
+        paramsAT2 = gge.gaugeParams.copy(prms)
+        paramsAT2.num := long_terms
+        paramsAT2.min := minFromStartLongterms
+        paramsAT2.max := maxFromStartLongterms
+        paramsAT2.title := 'Long Terms'
+        paramsAT2.minLabel := str.format(format, minFromStartLongterms)
+        paramsAT2.maxLabel := str.format(format, maxFromStartLongterms)
+        printer.gauge(paramsAT2)
+        long := label.new( bar_index, long_terms, "Long Terms", style=label.style_label_left, color= color.new(long_term_col, 100), textcolor = long_term_col, tooltip = tooltip_long_terms)
+        label.delete(long[1])
+
+
+
+    if show_mid
+        paramsAT3 = gge.gaugeParams.copy(prms)
+        paramsAT3.num := mid_summation
+        paramsAT3.min := minFromStartMidterms
+        paramsAT3.max := maxFromStartMidterms
+        paramsAT3.title := 'Mid Terms'
+        paramsAT3.minLabel := str.format(format, minFromStartMidterms)
+        paramsAT3.maxLabel := str.format(format, maxFromStartMidterms)
+        printer.gauge(paramsAT3)
+        mid := label.new(bar_index, mid_summation, "Mid Terms", style=label.style_label_left, color= color.new(mid_term_col, 100), textcolor = mid_term_col, tooltip = tooltip_middle_terms)
+        label.delete(mid[1])
+
+//@faiyaz7283 (MPL-2.0)
+        
+
+
+
+
+

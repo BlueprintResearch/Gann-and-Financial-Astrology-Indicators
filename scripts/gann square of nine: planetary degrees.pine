@@ -1,0 +1,812 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • GANN SQUARE OF NINE: PLANETARY DEGREES
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Maps planetary positions to Gann's Square of Nine grid
+//               with pivot high/low degree tracking, target degree alerts,
+//               and future degree projections. Supports both geocentric
+//               and heliocentric calculations.
+//
+// @author       BlueprintResearch (Javonnii)
+// @version      2.0
+//
+// @license      DUAL LICENSE:
+//
+//               ▸ SQUARE OF NINE TABLE IMPLEMENTATION (Lines ~455-655):
+//                 Mozilla Public License 2.0 (MPL 2.0)
+//                 Adapted from ThiagoSchmitz's "Gann Square of 9" (Feb 2023)
+//                 https://www.tradingview.com/script/cSzck7Kl-Gann-Square-of-9/
+//
+//               ▸ ALL OTHER CODE:
+//                 Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+//                 (CC BY-NC-SA 4.0)
+//                 https://creativecommons.org/licenses/by-nc-sa/4.0/
+//                 © 2026 BlueprintResearch / Javonnii
+//
+// @theory       Uses VSOP87, ELP2000-82, and Meeus algorithms via
+//               Blueprint Research ephemeris libraries for accurate
+//               planetary longitude calculations.
+//
+// @features     • Square of Nine grid with planetary degree mapping
+//               • Pivot high/low detection with degree labels
+//               • User-defined target degree alerts with bgcolor
+//               • Future degree projections (up to 500 bars)
+//               • Retrograde indicator (red text on So9)
+//               • Geocentric and heliocentric modes
+//
+// @accuracy     High accuracy using VSOP87/ELP2000-82 truncated series.
+//               Within 1-10 arcseconds for most planets.
+//
+// @open_source  This library is part of an open-source alternative to
+//               proprietary astronomical libraries. Study, modify, and
+//               share freely. We believe knowledge of the cosmos belongs
+//               to everyone.
+//
+// @credits      Square of Nine grid visualization adapted from
+//               ThiagoSchmitz's "Gann Square of 9" (Feb 2023)
+//               https://www.tradingview.com/script/cSzck7Kl-Gann-Square-of-9/
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2026 BlueprintResearch / Javonnii
+//   DUAL LICENSE: CC BY-NC-SA 4.0 (original code) + MPL 2.0 (So9 table)
+// ════════════════════════════════════════════════════════════════
+//
+
+
+//@version=6
+indicator("Gann Square of Nine: Planetary Degrees", overlay=true, max_labels_count=500, max_bars_back=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════
+// Library Imports
+// ═══════════════════════════════════════════════════════════════════
+import BlueprintResearch/lib_ephemeris/1 as eph
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: BLUEPRINT RESEARCH ORIGINAL CODE
+// LICENSE: CC BY-NC-SA 4.0 - Non-Commercial Use Only
+// © 2026 BlueprintResearch / Javonnii
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════
+// User Inputs
+// ═══════════════════════════════════════════════════════════════════
+
+// Tooltips
+tooltip_anchor = "Select the timestamp of a significant high or low pivot on any timeframe. Pivots generated after this timestamp will be plotted on the So9."
+tooltip_pivot_type = "Select based on the pivot at your timestamp. High for downward spiral, Low for upward."
+tooltip_pivot_sens = "Pivot Point Highs: Determined by counting bars with lower highs on both sides of a high point. Pivot Point Lows: Determined by counting bars with higher lows on both sides of a low point."
+tooltip_overlay = "Enter degree to plot square overlay. This makes it easier to draw lines to track angle relationship from the entered degree."
+
+// ─────────────────────────────────────────────────────────────────────
+// 1. Anchor Point
+// ─────────────────────────────────────────────────────────────────────
+group1 = "1. Anchor Point"
+
+dateTime = input.time(0, "Anchor Timestamp", group=group1, confirm=true, tooltip=tooltip_anchor)
+selectHL = input.string("Low", "Pivot Type", options=["High", "Low"], group=group1, tooltip=tooltip_pivot_type)
+
+// ─────────────────────────────────────────────────────────────────────
+// 2. Planet Selection
+// ─────────────────────────────────────────────────────────────────────
+group2 = "2. Planet Selection"
+
+planet_in = input.string("☉︎ Sun", "Planet",
+    options=["☉︎ Sun", "☽︎ Moon", "☿ Mercury", "♀ Venus", "🜨 Earth", "♂ Mars", "♃ Jupiter", "♄ Saturn", "⛢ Uranus", "♆ Neptune", "♇ Pluto"],
+    group=group2)
+geo = input.bool(true, "Geocentric", group=group2, tooltip="Unchecked for heliocentric coordinates")
+
+// ─────────────────────────────────────────────────────────────────────
+// 3. Target Degree Alerts
+// ─────────────────────────────────────────────────────────────────────
+group3 = "3. Target Degree Alerts"
+
+preset_degrees = input.string("None", "Preset So9 Degrees",
+    options=["None", "0° Zero", "45°", "90°", "135°", "180°", "225°", "270°", "315°"],
+    group=group3,
+    tooltip="Select a preset So9 degree list, or choose 'None' to use only custom degrees")
+
+target_degrees_str = input.text_area("", "Custom Degrees",
+    group=group3,
+    tooltip="Enter custom degrees separated by commas or newlines.\nThese are combined with preset degrees above.")
+
+show_degree_alerts = input.bool(true, "Enable Degree Alerts",
+    group=group3,
+    tooltip="Trigger alerts when planet crosses target degrees")
+
+show_future_degrees = input.bool(true, "Show Future Degree Projections",
+    group=group3,
+    tooltip="Display when planet will reach each target degree")
+
+look_ahead = input.int(250, "Bars to Look Ahead",
+    minval=50, maxval=500,
+    group=group3,
+    tooltip="Number of future bars to scan for degree arrivals")
+
+tz_input = input.string("UTC", "Timezone for Future Dates",
+    options=["UTC", "America/New_York", "America/Chicago", "America/Denver",
+             "America/Los_Angeles", "Europe/London", "Europe/Paris",
+             "Asia/Tokyo", "Asia/Hong_Kong", "Australia/Sydney"],
+    group=group3,
+    tooltip="Timezone for formatting future date labels")
+
+show_future_datetime = input.bool(true, "Show Date/Time Labels",
+    group=group3,
+    tooltip="Toggle visibility of date/time labels on future projection markers")
+
+future_line_color = input.color(color.yellow, "Future Projection Color",
+    group=group3, inline="proj_colors")
+
+crossed_line_color = input.color(color.gray, "Already Crossed Color",
+    group=group3, inline="proj_colors",
+    tooltip="Color for degrees that have already been crossed since anchor")
+
+// ─────────────────────────────────────────────────────────────────────
+// 4. Pivot Detection
+// ─────────────────────────────────────────────────────────────────────
+group4 = "4. Pivot Detection"
+
+pivotHighBars = input.int(title="Pivot High Bars", defval=10, minval=1, group=group4, tooltip=tooltip_pivot_sens)
+pivotLowBars = input.int(title="Pivot Low Bars", defval=10, minval=1, group=group4)
+
+hide_pivot_labels = input.bool(false, "Hide Pivot Labels", group=group4)
+rounding = input.int(0, "Degree Rounding Precision", minval=0, group=group4)
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. Visual Style
+// ─────────────────────────────────────────────────────────────────────
+group5 = "5. Visual Style"
+
+labelColorH = input.color(color.lime, "High Pivot Color", group=group5, inline="pivot_colors")
+labelColorL = input.color(color.red, "Low Pivot Color", group=group5, inline="pivot_colors")
+labelColorS = input.color(color.orange, "Equal Pivots", group=group5, inline="pivot_colors")
+
+TextColor = input.color(#000000, "So9 Text Color", group=group5)
+
+iTxtSize = input.string("Large", "Label Text Size", options=["Auto", "Tiny", "Small", "Normal", "Large"], group=group5)
+vTxtSize = iTxtSize == "Auto" ? size.auto : iTxtSize == "Tiny" ? size.tiny : iTxtSize == "Small" ? size.small : iTxtSize == "Normal" ? size.normal : iTxtSize == "Large" ? size.large : size.small
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. So9 Grid Overlay
+// ─────────────────────────────────────────────────────────────────────
+group6 = "6. So9 Grid Overlay"
+
+overlay = input.int(0, "Overlay Pivot Degree", group=group6, tooltip=tooltip_overlay)
+
+plotSquareOL = input.bool(false, "Show Square Overlay", group=group6, inline="square_ol")
+SquareOLCol = input.color(color.white, "", group=group6, inline="square_ol")
+
+plotFortyFiveOL = input.bool(false, "Show 45° Overlay", group=group6, inline="45_ol", tooltip="Plot the 45 degree angles from entered degree")
+FortyFiveOLCol = input.color(color.aqua, "", group=group6, inline="45_ol")
+
+// ─────────────────────────────────────────────────────────────────────
+// 7. So9 Table
+// ─────────────────────────────────────────────────────────────────────
+group7 = "7. So9 Table"
+
+var int levels = 9
+var string tablePosition = input.string("Top Right", "Table Position",
+    options=["Top Right", "Middle Right", "Bottom Right", "Top Left", "Middle Left", "Bottom Left"],
+    group=group7)
+
+var float width = input.float(0, "Cell Width", group=group7, inline="cell_size")
+var float height = input.float(0, "Cell Height", group=group7, inline="cell_size")
+
+var int frameWidth = input.int(1, "Frame Width", group=group7)
+
+var color backgroundColor = input.color(color.new(color.black, 100), "Background", group=group7, inline="table_colors")
+var color frameColor = input.color(color.new(color.white, 40), "Frame", group=group7, inline="table_colors")
+
+var string tableTextSize = input.string(size.normal, "Table Font Size",
+    options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge],
+    group=group7, inline="table_text")
+var color tableTextColor = input.color(color.new(color.white, 0), "", group=group7, inline="table_text")
+
+// ─────────────────────────────────────────────────────────────────────
+// 8. So9 Diagonals
+// ─────────────────────────────────────────────────────────────────────
+group8 = "8. So9 Diagonals"
+
+var bool showDiagonal = input.bool(true, "Show Diagonals", group=group8)
+var color diagonalColor = input.color(color.new(#004b8d, 35), "Diagonal Cross", group=group8, inline="diag_colors")
+var color cardinalColor = input.color(color.new(#801922, 35), "Cardinal Cross", group=group8, inline="diag_colors")
+
+// ═══════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════
+increase = 1
+
+// Extract the first character from planet string
+planet_symbol = str.substring(planet_in, 0, 1)
+planet_string = planet_symbol
+
+centricSign = geo ? "𝒢" : "ℋ"
+
+// Persistent variables
+var bool dateTimeReached = false
+var float[] pivotHighsArray = array.new_float()
+var float[] pivotLowsArray = array.new_float()
+var float anchor_degree = na
+var float prev_planet_long = na
+var array<float> crossed_degrees_history = array.new_float()
+var bool any_degree_crossed = false
+
+col_out = planet_in == "☉︎ Sun" ? color.yellow : planet_in == "☽︎ Moon" ? color.silver : planet_in == "☿ Mercury" ? color.maroon : planet_in == "♀ Venus" ? color.green : planet_in == "🜨 Earth" ? color.blue : planet_in == "♂ Mars" ? color.red : planet_in == "♃ Jupiter" ? color.orange : planet_in == "♄ Saturn" ? color.gray : planet_in == "⛢ Uranus" ? color.navy : planet_in == "♆ Neptune" ? color.yellow : planet_in == "♇ Pluto" ? color.black : na
+
+// ═══════════════════════════════════════════════════════════════════
+// Helper Functions
+// ═══════════════════════════════════════════════════════════════════
+
+// Function to get planet longitude using lib_ephemeris
+f_get_planet_longitude(string planet_str, bool use_geo, int timestamp_ms) =>
+    planet_enum = eph.string_to_planet(planet_str)
+    eph.get_longitude(planet_enum, timestamp_ms, use_geo)
+
+// Function to get planet speed (for retrograde detection)
+f_get_planet_speed(string planet_str, int timestamp_ms) =>
+    planet_enum = eph.string_to_planet(planet_str)
+    eph.get_speed(planet_enum, timestamp_ms)
+
+// Check if planet can retrograde (Sun, Moon, Earth cannot from geocentric view)
+can_retrograde(string planet_str) =>
+    not (str.contains(planet_str, "Sun") or str.contains(planet_str, "Moon") or str.contains(planet_str, "Earth"))
+
+// Parse degree string (handles commas and newlines)
+parse_degrees(string deg_str) =>
+    array<float> degrees = array.new_float()
+    if str.length(deg_str) > 0
+        // Replace newlines with commas for unified parsing
+        normalized_str = str.replace_all(deg_str, "\n", ",")
+        parts = str.split(normalized_str, ",")
+        for i = 0 to array.size(parts) - 1
+            part = str.trim(array.get(parts, i))
+            if str.length(part) > 0
+                deg_val = str.tonumber(part)
+                if not na(deg_val)
+                    // Normalize to 0-360 range
+                    normalized_deg = deg_val % 360
+                    if normalized_deg < 0
+                        normalized_deg += 360
+                    array.push(degrees, normalized_deg)
+    degrees
+
+// Get predefined So9 degree array based on dropdown selection
+get_preset_degrees(string preset) =>
+    array<float> degrees = array.new_float()
+    switch preset
+        "0° Zero" =>
+            array.push(degrees, 2.0), array.push(degrees, 11.0), array.push(degrees, 28.0)
+            array.push(degrees, 53.0), array.push(degrees, 86.0), array.push(degrees, 127.0)
+            array.push(degrees, 176.0), array.push(degrees, 233.0), array.push(degrees, 298.0)
+        "45°" =>
+            array.push(degrees, 3.0), array.push(degrees, 13.0), array.push(degrees, 31.0)
+            array.push(degrees, 57.0), array.push(degrees, 91.0), array.push(degrees, 133.0)
+            array.push(degrees, 183.0), array.push(degrees, 241.0), array.push(degrees, 307.0)
+        "90°" =>
+            array.push(degrees, 4.0), array.push(degrees, 15.0), array.push(degrees, 34.0)
+            array.push(degrees, 61.0), array.push(degrees, 96.0), array.push(degrees, 139.0)
+            array.push(degrees, 190.0), array.push(degrees, 249.0), array.push(degrees, 316.0)
+        "135°" =>
+            array.push(degrees, 5.0), array.push(degrees, 17.0), array.push(degrees, 37.0)
+            array.push(degrees, 65.0), array.push(degrees, 101.0), array.push(degrees, 145.0)
+            array.push(degrees, 197.0), array.push(degrees, 257.0), array.push(degrees, 325.0)
+        "180°" =>
+            array.push(degrees, 6.0), array.push(degrees, 19.0), array.push(degrees, 40.0)
+            array.push(degrees, 69.0), array.push(degrees, 106.0), array.push(degrees, 151.0)
+            array.push(degrees, 204.0), array.push(degrees, 265.0), array.push(degrees, 334.0)
+        "225°" =>
+            array.push(degrees, 7.0), array.push(degrees, 21.0), array.push(degrees, 43.0)
+            array.push(degrees, 73.0), array.push(degrees, 111.0), array.push(degrees, 157.0)
+            array.push(degrees, 211.0), array.push(degrees, 273.0), array.push(degrees, 343.0)
+        "270°" =>
+            array.push(degrees, 8.0), array.push(degrees, 23.0), array.push(degrees, 46.0)
+            array.push(degrees, 77.0), array.push(degrees, 116.0), array.push(degrees, 163.0)
+            array.push(degrees, 218.0), array.push(degrees, 281.0), array.push(degrees, 352.0)
+        "315°" =>
+            array.push(degrees, 9.0), array.push(degrees, 25.0), array.push(degrees, 49.0)
+            array.push(degrees, 81.0), array.push(degrees, 121.0), array.push(degrees, 169.0)
+            array.push(degrees, 225.0), array.push(degrees, 289.0)
+    degrees
+
+// Detect if longitude crossed a target degree between two values
+// Handles 360/0 boundary wrapping and both direct/retrograde motion
+degree_crossed(float prev_lon, float curr_lon, float target_deg) =>
+    result = false
+    if not na(prev_lon) and not na(curr_lon)
+        // Normalize all values to 0-360
+        prev = prev_lon % 360
+        prev := prev < 0 ? prev + 360 : prev
+        curr = curr_lon % 360
+        curr := curr < 0 ? curr + 360 : curr
+        target = target_deg % 360
+        target := target < 0 ? target + 360 : target
+
+        // Calculate movement delta
+        delta = curr - prev
+
+        // Handle wrap-around (planet crossed 360/0 boundary)
+        if delta > 180
+            delta -= 360
+        else if delta < -180
+            delta += 360
+
+        // Check if target was crossed
+        if delta > 0  // Forward motion
+            // Normalize target relative to prev
+            t_rel = target - prev
+            if t_rel < 0
+                t_rel += 360
+            if t_rel <= delta and t_rel > 0
+                result := true
+        else if delta < 0  // Retrograde motion
+            // Normalize target relative to curr
+            t_rel = prev - target
+            if t_rel < 0
+                t_rel += 360
+            if t_rel <= math.abs(delta) and t_rel > 0
+                result := true
+    result
+
+// Calculate pivot highs and lows
+ph = ta.pivothigh(pivotHighBars, pivotHighBars)
+pl = ta.pivotlow(pivotLowBars, pivotLowBars)
+
+var float planet_long = na
+// Combine preset degrees with custom degrees
+var array<float> target_degrees = array.new_float()
+preset_deg_array = get_preset_degrees(preset_degrees)
+custom_deg_array = parse_degrees(target_degrees_str)
+
+// Add preset degrees
+if array.size(preset_deg_array) > 0
+    for i = 0 to array.size(preset_deg_array) - 1
+        deg = array.get(preset_deg_array, i)
+        if not array.includes(target_degrees, deg)
+            array.push(target_degrees, deg)
+
+// Add custom degrees (avoiding duplicates)
+if array.size(custom_deg_array) > 0
+    for i = 0 to array.size(custom_deg_array) - 1
+        deg = array.get(custom_deg_array, i)
+        if not array.includes(target_degrees, deg)
+            array.push(target_degrees, deg)
+
+// Check if this planet can retrograde
+planet_can_retro = can_retrograde(planet_in)
+
+if (time > dateTime)  // Exclude labels when time == dateTime
+    // Calculate planetary degree
+    planet_long := f_get_planet_longitude(planet_in, geo, time)
+
+    // Only calculate degrees if it's after dateTime
+    degree1 = math.round(planet_long[pivotHighBars], rounding)
+    degree2 = math.round(planet_long[pivotLowBars], rounding)
+
+    // Handle degree 0 as 360
+    degree1 := degree1 == 0 ? 360 : degree1
+    degree2 := degree2 == 0 ? 360 : degree2
+
+    // **For Pivots High**
+    if not na(ph) and not na(degree1)
+        array.push(pivotHighsArray, degree1)
+        if not hide_pivot_labels
+            label.new(bar_index[pivotHighBars], ph, str.tostring(degree1) + "°\n" + planet_string, style=label.style_label_down, textcolor=labelColorH, size=vTxtSize, color=color.new(labelColorH, 100))
+
+    // **For Pivots Low**
+    if not na(pl) and not na(degree2)
+        array.push(pivotLowsArray, degree2)
+        if not hide_pivot_labels
+            label.new(bar_index[pivotLowBars], pl, planet_string + "\n" + str.tostring(degree2) + "°", style=label.style_label_up, color=color.new(labelColorH, 100), textcolor=labelColorL, size=vTxtSize)
+
+// ═══════════════════════════════════════════════════════════════════
+// Retrograde Detection
+// ═══════════════════════════════════════════════════════════════════
+// Get speed for retrograde detection (negative speed = retrograde)
+// Sun, Moon, Earth cannot retrograde from geocentric perspective
+planet_speed = planet_can_retro ? f_get_planet_speed(planet_in, time) : 0.0
+is_retrograde = planet_can_retro and planet_speed < 0
+
+// ═══════════════════════════════════════════════════════════════════
+// Target Degree Crossing Detection
+// ═══════════════════════════════════════════════════════════════════
+// Reset the crossing flag each bar
+any_degree_crossed := false
+
+// Reset historical tracking on anchor bar
+if time == dateTime
+    array.clear(crossed_degrees_history)
+
+// Check for degree crossings after anchor
+if time > dateTime and not na(prev_planet_long) and not na(planet_long) and array.size(target_degrees) > 0
+    for i = 0 to array.size(target_degrees) - 1
+        target_deg = array.get(target_degrees, i)
+        if degree_crossed(prev_planet_long, planet_long, target_deg)
+            any_degree_crossed := true
+            // Track historical crossings (only add if not already present)
+            if not array.includes(crossed_degrees_history, target_deg)
+                array.push(crossed_degrees_history, target_deg)
+            // Dynamic alert with specific degree
+            if show_degree_alerts
+                alert(planet_string + " crossed " + str.tostring(target_deg) + "° on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// Update previous value for next bar
+prev_planet_long := planet_long
+
+// Background color for bars where target degrees were crossed
+bgcolor(any_degree_crossed ? color.new(future_line_color, 50) : na)
+
+if (time == dateTime)
+    dateTimeReached := true
+    planet_long_ = f_get_planet_longitude(planet_in, geo, time)
+
+    anchor_degree := math.round(planet_long_, rounding)
+    anchor_degree := anchor_degree == 0 ? 360 : anchor_degree
+
+    // Adjust the label position higher above the high
+    label_y_position = high + (low * 0.0333)
+
+    // Create the label
+    if not hide_pivot_labels
+        anchor_label = label.new(bar_index, label_y_position, str.tostring(anchor_degree) + "°" + "\n" + centricSign +  " " + planet_string + "\n" + "⚓", style=label.style_label_down, textcolor=SquareOLCol, size=vTxtSize, color=color.new(labelColorH, 100))
+
+        // Create a vertical line from high to the label
+        line.new(bar_index, low, bar_index, label_y_position, width=1, color=color.new(SquareOLCol, 0), style=line.style_dashed)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: SQUARE OF NINE TABLE IMPLEMENTATION
+// LICENSE: Mozilla Public License 2.0 (MPL 2.0)
+// ATTRIBUTION: Adapted from ThiagoSchmitz's "Gann Square of 9" (Feb 2023)
+//              https://www.tradingview.com/script/cSzck7Kl-Gann-Square-of-9/
+// SCOPE: Table type, building functions, spiral algorithm, and visualization
+// ═══════════════════════════════════════════════════════════════════════════
+
+type tableCells
+    int column
+    int row
+
+var string position = switch tablePosition
+    "Top Right" => position.top_right
+    "Middle Right" => position.middle_right
+    "Bottom Right" => position.bottom_right
+    "Top Left" => position.top_left
+    "Middle Left" => position.middle_left
+    => position.bottom_left
+var int size = levels * 2 + 1
+var table tab = table.new(position, size, size, backgroundColor, frameColor, frameWidth, frameColor, frameWidth)
+var tableCells[] coordinates = array.new<tableCells>()
+var float[] values = array.new_float()
+var float[] diagonalValues = array.new_float()
+
+// Functions
+createCell(int c, int r, float v, color bgcolor=na) =>
+    table.cell(tab, c, r, str.tostring(v), width, height, tableTextColor, text_size=tableTextSize, bgcolor=bgcolor)
+
+isDiagonal(int c, int l) => c % l == 1
+
+setCenterRowAndColumnBackground(table tab, int size, color bgcolor) =>
+    int center = math.floor(size / 2)
+    // Set the center column background
+    for r = 0 to size - 1
+        table.cell_set_bgcolor(tab, center, r, bgcolor)
+    // Set the center row background
+    for c = 0 to size - 1
+        table.cell_set_bgcolor(tab, c, center, bgcolor)
+
+getDiagonalColor() => showDiagonal ? diagonalColor : na
+
+createCellWithValueAndColor(int column, int row, float value, color col) =>
+    createCell(column, row, value, col)
+    pivot = tableCells.new(column, row)
+    array.push(coordinates, pivot)
+    array.push(values, value)
+
+overlay_plot(time_, degree) =>
+    _sqrt = math.sqrt(time_)
+    _deg_value = _sqrt + (degree)
+    _result = (_deg_value * _deg_value)
+    _result
+
+// Build Square Table
+var float[] overlayValues = array.new_float()
+var float[] overlayValues2 = array.new_float()
+
+if (time == dateTime)
+    int currentColumn = levels
+    int currentRow = levels
+    int doubleLevels = levels * 2
+    float startingValue = 1.0
+    int count = 1
+    int layer = 2
+
+    if selectHL == "Low"
+        createCell(currentColumn, currentRow, startingValue, diagonalColor)
+        array.push(diagonalValues, startingValue)
+
+        for i = 1 to doubleLevels by 1
+            int sign = i % 2 == 1 ? -1 : 1
+            int limit = i == 1 ? i / 2 : i
+
+            for j = 0 to i * 2 - 1 by 1
+                startingValue := startingValue + increase
+                count := count + 1
+                layer := math.sqrt(count) == layer + 1 ? layer + 2 : layer
+                isDiagonal = isDiagonal(count, layer)
+                col = isDiagonal ? getDiagonalColor() : na
+                currentColumn := j < limit ? currentColumn + sign : currentColumn
+                currentRow := j >= limit ? currentRow + sign : currentRow
+                createCellWithValueAndColor(currentColumn, currentRow, startingValue, col)
+                if isDiagonal
+                    array.push(diagonalValues, startingValue)
+
+            if i == doubleLevels
+                for j = 0 to i - 1 by 1
+                    startingValue := startingValue + increase
+                    count := count + 1
+                    isDiagonal = isDiagonal(count, layer)
+                    col = isDiagonal ? getDiagonalColor() : na
+                    currentColumn := currentColumn - sign
+                    createCellWithValueAndColor(currentColumn, currentRow, startingValue, col)
+                    if isDiagonal
+                        array.push(diagonalValues, startingValue)
+
+    if selectHL == "High"
+        createCell(currentColumn, currentRow, startingValue, diagonalColor)
+        array.push(diagonalValues, startingValue)
+
+        for i = 1 to doubleLevels by 1
+            int sign = i % 2 == 1 ? -1 : 1
+            int limit = i == 1 ? i / 2 : i
+
+            for j = 0 to i * 2 - 1 by 1
+                startingValue := startingValue + increase
+                if startingValue < 0  // Prevent negative values for "High"
+                    break
+                count := count + 1
+                layer := math.sqrt(count) == layer + 1 ? layer + 2 : layer
+                isDiagonal = isDiagonal(count, layer)
+                col = isDiagonal ? getDiagonalColor() : na
+                currentColumn := j < limit ? currentColumn + sign : currentColumn
+                currentRow := j >= limit ? currentRow + sign : currentRow
+                createCellWithValueAndColor(currentColumn, currentRow, startingValue, col)
+                if isDiagonal
+                    array.push(diagonalValues, startingValue)
+
+            if i == doubleLevels
+                for j = 0 to i - 1 by 1
+                    startingValue := startingValue + increase
+                    if startingValue < 0  // Prevent negative values for "High"
+                        break
+                    count := count + 1
+                    isDiagonal = isDiagonal(count, layer)
+                    col = isDiagonal ? getDiagonalColor() : na
+                    currentColumn := currentColumn - sign
+                    createCellWithValueAndColor(currentColumn, currentRow, startingValue, col)
+                    if isDiagonal
+                        array.push(diagonalValues, startingValue)
+
+    setCenterRowAndColumnBackground(tab, size, cardinalColor)
+
+if barstate.islast
+    // Highlight target degrees on So9 grid (rendered first so pivots/anchor can override)
+    if array.size(target_degrees) > 0
+        for i = 0 to array.size(target_degrees) - 1
+            target_deg = array.get(target_degrees, i)
+            target_cell_idx = array.indexof(values, target_deg)
+            if target_cell_idx >= 0
+                coord = array.get(coordinates, target_cell_idx)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, color.new(future_line_color, 50))
+
+    // Process High Pivots
+    if array.size(pivotHighsArray) > 0
+        for i = 0 to array.size(pivotHighsArray) - 1
+            pivotHigh = array.get(pivotHighsArray, i)
+            pivot_high_cell = array.indexof(values, pivotHigh)
+            if pivot_high_cell >= 0
+                coord = array.get(coordinates, pivot_high_cell)
+                if array.includes(pivotLowsArray, pivotHigh)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorH)
+                table.cell_set_text_color(tab, coord.column, coord.row, TextColor)
+
+    // Process Low Pivots
+    if array.size(pivotLowsArray) > 0
+        for i = 0 to array.size(pivotLowsArray) - 1
+            pivotLow = array.get(pivotLowsArray, i)
+            pivot_low_cell = array.indexof(values, pivotLow)
+            if pivot_low_cell >= 0
+                coord = array.get(coordinates, pivot_low_cell)
+                if array.includes(pivotHighsArray, pivotLow)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorL)
+                table.cell_set_text_color(tab, coord.column, coord.row, TextColor)
+
+    anchor_deg = array.indexof(values, anchor_degree)
+    if anchor_deg >= 0
+        coord = array.get(coordinates, anchor_deg)
+        table.cell_set_bgcolor(tab, coord.column, coord.row, SquareOLCol)
+        table.cell_set_text_color(tab, coord.column, coord.row, TextColor)
+        table.cell_set_text(tab, coord.column, coord.row, text="⚓")
+
+    square_overlay = array.from(.5, 1, 1.5, 2)
+    forty_five = array.from(.25, .75, 1.25, 1.75)
+
+    if overlay > 0 and plotSquareOL
+        for i = 0 to array.size(square_overlay) - 1
+            deg = array.get(square_overlay, i)
+            result = overlay_plot(overlay, deg)
+            array.push(overlayValues, result)
+
+        for i = 0 to array.size(overlayValues) - 1
+            cell_time = array.get(overlayValues, i)
+            index = array.indexof(values, math.floor(cell_time))
+            if index >= 0
+                coord = array.get(coordinates, index)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, bgcolor=SquareOLCol)
+                table.cell_set_text_color(tab, coord.column, coord.row, text_color=TextColor)
+
+    if overlay > 0 and plotFortyFiveOL
+        for i = 0 to array.size(forty_five) - 1
+            deg = array.get(forty_five, i)
+            result = overlay_plot(overlay, deg)
+            array.push(overlayValues2, result)
+
+        for i = 0 to array.size(overlayValues2) - 1
+            cell_time = array.get(overlayValues2, i)
+            index = array.indexof(values, math.floor(cell_time))
+            if index >= 0
+                coord = array.get(coordinates, index)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, bgcolor=FortyFiveOLCol)
+                table.cell_set_text_color(tab, coord.column, coord.row, text_color=TextColor)
+
+if barstate.isrealtime or barstate.islast
+    current_planet_degree = planet_long
+    current_planet_degree := current_planet_degree == 0 ? 360 : current_planet_degree
+    index = array.indexof(values, math.round(current_planet_degree))
+    if index >= 0 and not barstate.isconfirmed
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(tab, coord.column, coord.row, col_out)
+        // Use red text if retrograde, otherwise normal text color
+        so9_text_color = is_retrograde ? color.red : TextColor
+        table.cell_set_text_color(tab, coord.column, coord.row, so9_text_color)
+        // Add retrograde symbol if retrograde
+        retro_indicator = is_retrograde ? "℞" : ""
+        table.cell_set_text(tab, coord.column, coord.row, text=centricSign + planet_symbol + retro_indicator)
+        table.cell_set_tooltip(tab, coord.column, coord.row, tooltip=planet_string + (is_retrograde ? " (Retrograde)" : ""))
+
+// ═══════════════════════════════════════════════════════════════════════════
+// END SECTION: SQUARE OF NINE TABLE IMPLEMENTATION (MPL 2.0)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: FUTURE DEGREE PROJECTIONS (BLUEPRINT RESEARCH ORIGINAL)
+// LICENSE: CC BY-NC-SA 4.0 - Non-Commercial Use Only
+// © 2026 BlueprintResearch / Javonnii
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Degree Projections
+// ═══════════════════════════════════════════════════════════════════
+
+// State variables for future projection visualization
+var array<line> degree_lines = array.new_line()
+var array<label> degree_labels = array.new_label()
+
+// Calculate proportional line height
+line_height = ta.atr(14) * 2
+
+if show_future_degrees and (barstate.islast or barstate.isrealtime) and array.size(target_degrees) > 0
+    // Clean up previous markers (check size before cleanup)
+    if array.size(degree_lines) > 0
+        for i = 0 to array.size(degree_lines) - 1
+            line.delete(array.get(degree_lines, i))
+        array.clear(degree_lines)
+    if array.size(degree_labels) > 0
+        for i = 0 to array.size(degree_labels) - 1
+            label.delete(array.get(degree_labels, i))
+        array.clear(degree_labels)
+
+    bar_gap_seconds = timeframe.in_seconds(timeframe.period)
+    bar_gap = bar_gap_seconds * 1000
+
+    float prev_lon = planet_long
+
+    for i = 1 to look_ahead
+        future_time = time + (bar_gap * i)
+
+        // Get future planet position
+        future_lon = f_get_planet_longitude(planet_in, geo, future_time)
+
+        // Get future retrograde status (only for planets that can retrograde)
+        future_speed = planet_can_retro ? f_get_planet_speed(planet_in, future_time) : 0.0
+        future_retrograde = planet_can_retro and future_speed < 0
+
+        // Check EACH target degree for crossing (show ALL occurrences)
+        for j = 0 to array.size(target_degrees) - 1
+            target_deg = array.get(target_degrees, j)
+            if degree_crossed(prev_lon, future_lon, target_deg)
+                // Determine if this degree was already crossed historically
+                was_crossed = array.includes(crossed_degrees_history, target_deg)
+
+                // Use different styling for already-crossed degrees
+                line_col = was_crossed ? crossed_line_color : future_line_color
+                label_bg = was_crossed ? crossed_line_color : future_line_color
+
+                // Calculate position
+                crossing_time = future_time
+                line_top = close + line_height
+                line_bottom = close - line_height
+
+                // Only draw if event is truly in the future
+                if crossing_time > time
+                    // Draw vertical dotted line
+                    new_line = line.new(crossing_time, line_bottom, crossing_time, line_top,
+                        xloc=xloc.bar_time,
+                        color=line_col,
+                        width=1,
+                        style=line.style_dotted)
+                    array.push(degree_lines, new_line)
+
+                    // Top label: planet symbol + degree + retrograde indicator
+                    retro_marker = future_retrograde ? "℞" : ""
+                    top_label_text = planet_string + retro_marker + "\n" + str.tostring(target_deg) + "°"
+                    new_top_label = label.new(crossing_time, line_top, top_label_text,
+                        style=label.style_text_outline,
+                        color=label_bg,
+                        textcolor=TextColor,
+                        xloc=xloc.bar_time,
+                        size=vTxtSize,
+                        text_font_family=font.family_monospace)
+                    array.push(degree_labels, new_top_label)
+
+                    // Bottom label: formatted date/time (only if toggle enabled)
+                    if show_future_datetime
+                        crossing_date = str.format_time(crossing_time, "MMM d, yy\nHH:mm", timezone=tz_input)
+                        new_bottom_label = label.new(crossing_time, line_bottom, crossing_date,
+                            style=label.style_text_outline,
+                            color=label_bg,
+                            textcolor=TextColor,
+                            xloc=xloc.bar_time,
+                            size=vTxtSize,
+                            text_font_family=font.family_monospace)
+                        array.push(degree_labels, new_bottom_label)
+
+        prev_lon := future_lon
+
+// ═══════════════════════════════════════════════════════════════════
+// Alert Conditions
+// ═══════════════════════════════════════════════════════════════════
+
+// Static alertcondition for target degree crossing
+alertcondition(any_degree_crossed and show_degree_alerts,
+    title="Planet Degree Crossing",
+    message="Planet has crossed a target degree")
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LICENSE SUMMARY
+// ═══════════════════════════════════════════════════════════════════════════
+// This script contains code under two licenses:
+//
+// 1. SQUARE OF NINE TABLE (~Lines 455-670):
+//    Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
+//    You may use, modify, and distribute this section under MPL 2.0 terms.
+//    Adapted from ThiagoSchmitz's "Gann Square of 9"
+//
+// 2. ALL OTHER CODE:
+//    CC BY-NC-SA 4.0 - https://creativecommons.org/licenses/by-nc-sa/4.0/
+//    You may share and adapt for NON-COMMERCIAL purposes only.
+//    You must give attribution and use the same license for derivatives.
+//
+// Commercial use of any CC BY-NC-SA sections requires written permission
+// from BlueprintResearch / Javonnii.
+// ═══════════════════════════════════════════════════════════════════════════

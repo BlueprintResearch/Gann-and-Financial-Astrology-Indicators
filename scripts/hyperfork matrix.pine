@@ -1,0 +1,845 @@
+//   ════════════════════════════════════════════════════════════
+//                BLUEPRINT RESEARCH • HYPERFORK MATRIX
+//   ════════════════════════════════════════════════════════════
+//
+//                        ∧       ∧       ∧
+//                        │╲     ╱│╲     ╱│
+//                        │ ╲   ╱ │ ╲   ╱ │
+//                        │  ╲ ╱  │  ╲ ╱  │
+//                        │   ╳   │   ╳   │
+//                        │  ╱ ╲  │  ╱ ╲  │
+//                        │ ╱   ╲ │ ╱   ╲ │
+//                        │╱     ╲│╱     ╲│
+//                        └───────┴───────┘
+//                                ║
+//                                ║
+//                                ║
+//                                ╨
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Advanced Andrews Pitchfork tool with action/reaction
+//               propagation lines and lattice matrix functionality.
+//               Supports Original, Schiff, and Modified Schiff
+//               variants with forward/backward projections.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0 - Non-commercial use with attribution, share-alike
+// @version      1.4 (January 2026) - Fixed alert conditions, simplified alert UI
+//
+// @inspiration  Builds on Patrick Mikula's "Super Pitchfork" concept
+//               from "Best Trendline Methods" - evolved with automatic
+//               projections, lattice functionality, and multiple variants.
+//
+// @features     • 3 pitchfork variants (Original, Schiff, Modified Schiff)
+//               • Action/Reaction propagation lines (forward & backward)
+//               • Lattice matrix grid functionality
+//               • Simplified pivot selection (auto Low-High-Low or High-Low-High)
+//               • Customizable styling for all elements
+//               • Logarithmic scale support
+//               • Price crossing alerts for all line types
+//
+// @open_source  This tool is part of an open-source collection of
+//               technical analysis tools. Study, modify, and share freely.
+//
+//   ════════════════════════════════════════════════════════════
+//   © 2025 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0
+//   ════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("Hyperfork Matrix", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════
+MAX_BAR_EXTENSION = 500
+
+// ═══════════════════════════════════════════════════════════════════
+// Inputs - 1. Pivot Points
+// ═══════════════════════════════════════════════════════════════════
+group_pivots = "1. Pivot Points"
+start_pivot_type = input.string("Auto", title="Starting Pivot Type", options=["Auto", "Low", "High"], group=group_pivots,
+    tooltip="Auto: detect pattern from prices | Low: force Low-High-Low | High: force High-Low-High")
+pivotA_time = input.time(title="Pivot A Time", defval=0, group=group_pivots, tooltip="Select the timestamp for the starting pivot (A, the anchor point)", confirm=true)
+pivotB_time = input.time(title="Pivot B Time", defval=0, group=group_pivots, tooltip="Select the timestamp for Pivot B (the first swing point after A)", confirm=true)
+pivotC_time = input.time(title="Pivot C Time", defval=0, group=group_pivots, tooltip="Select the timestamp for Pivot C (the second swing point after B)", confirm=true)
+show_pivot_labels = input.bool(true, title="Show Pivot Labels", group=group_pivots, tooltip="Show A, B, C labels at pivot points")
+labelColorH = input.color(color.lime, "High Pivot Color", group=group_pivots, inline="pivot_colors")
+labelColorL = input.color(color.red, "Low Pivot Color", group=group_pivots, inline="pivot_colors")
+pivot_label_size = input.string("Normal", title="Size", options=["Tiny", "Small", "Normal", "Large"], group=group_pivots, tooltip="Text size for pivot labels")
+
+// ═══════════════════════════════════════════════════════════════════
+// Inputs - 2. Pitchfork Settings
+// ═══════════════════════════════════════════════════════════════════
+group_pitchfork = "2. Pitchfork Settings"
+use_log = input.bool(false, title="Logarithmic Scale", group=group_pitchfork, tooltip="Enable to support logarithmic chart scaling. Calculations will be performed in log space for proper line rendering on log charts.")
+pitchfork_type = input.string(title="Pitchfork Type", defval="Original", options=["Original", "Schiff", "Modified Schiff"], group=group_pitchfork,
+    tooltip="Original: anchor at A | Schiff: anchor shifted 50% Y toward B | Modified Schiff: anchor shifted 50% X+Y toward B")
+extra_levels = input.int(title="Extra Parallel Levels", defval=0, minval=0, group=group_pitchfork, tooltip="Number of additional parallel lines outside the main pitchfork")
+line_color = input.color(color.lime, title="Pitchfork Color", group=group_pitchfork, inline="pitchfork", tooltip="Color for the pitchfork lines (median and parallels)")
+line_width = input.int(1, title="Width", minval=1, group=group_pitchfork, inline="pitchfork", tooltip="Width for the pitchfork lines")
+line_style = input.string("Solid", title="Style", options=["Solid", "Dashed", "Dotted"], group=group_pitchfork, inline="pitchfork", tooltip="Style for the pitchfork lines")
+extend_dir = input.string(title="Extend Direction", defval="Right", options=["Right", "Both"], group=group_pitchfork, tooltip="Direction to extend the pitchfork lines: Right, or Both")
+enable_price_range = input.bool(true, title="Enable Price Range Filter", group=group_pitchfork, tooltip="When enabled, extra parallels outside the price range are hidden.")
+price_range_min = input.float(0.0, title="Price Range Min", minval=0, group=group_pitchfork, tooltip="Minimum price for pitchfork elements. Extra parallels below this will be removed.")
+price_range_max = input.float(1000000.0, title="Price Range Max", minval=0, group=group_pitchfork, tooltip="Maximum price for pitchfork elements. Extra parallels above this will be removed.")
+
+// ═══════════════════════════════════════════════════════════════════
+// Inputs - 3. Action / Reaction Lines
+// ═══════════════════════════════════════════════════════════════════
+group_action_reaction = "3. Action / Reaction Lines"
+draw_type = input.string("Both", title="Draw Action/Reaction Lines", options=["None", "Action Only", "Reaction Only", "Both"], group=group_action_reaction, tooltip="Choose which lines to draw: None, Action Only, Reaction Only, or Both")
+forward_count = input.int(title="Forward Lines Offset", defval=0, group=group_action_reaction, tooltip="Offset from auto-extend. 0 = to current bar. Positive adds more, negative removes.")
+backward_count = input.int(title="Backward Lines Count", defval=0, minval=0, group=group_action_reaction, tooltip="Number of lines backward from the median")
+action_color = input.color(color.aqua, title="Action Lines Color", group=group_action_reaction, inline="action", tooltip="Color for the action transversal lines")
+action_width = input.int(1, title="Width", minval=1, group=group_action_reaction, inline="action", tooltip="Width for the action transversal lines")
+action_style = input.string("Dotted", title="Style", options=["Solid", "Dashed", "Dotted"], group=group_action_reaction, inline="action", tooltip="Style for the action transversal lines")
+reaction_color = input.color(#ff8c69, title="Reaction Lines Color", group=group_action_reaction, inline="reaction", tooltip="Color for the reaction transversal lines")
+reaction_width = input.int(1, title="Width", minval=1, group=group_action_reaction, inline="reaction", tooltip="Width for the reaction transversal lines")
+reaction_style = input.string("Dotted", title="Style", options=["Solid", "Dashed", "Dotted"], group=group_action_reaction, inline="reaction", tooltip="Style for the reaction transversal lines")
+
+// ═══════════════════════════════════════════════════════════════════
+// Inputs - 4. Lattice
+// ═══════════════════════════════════════════════════════════════════
+group_lattice = "4. Lattice"
+draw_lattice = input.bool(false, title="Draw Lattice", group=group_lattice, tooltip="Enable drawing of horizontal and vertical lattice lines based on pivots and intersections")
+lattice_pivot = input.string("A", title="Select Pivot for Horizontal", options=["A", "B", "C"], group=group_lattice, tooltip="Choose which pivot's horizontal line to plot")
+lattice_source = input.string("Pitchfork & Parallels", title="Intersection Source", options=["Pitchfork & Parallels", "Action Lines", "Reaction Lines", "Action & Reaction"], group=group_lattice, tooltip="Choose the source for intersections: Pitchfork & parallels, Action lines, Reaction lines, or both Action & Reaction")
+lattice_color = input.color(color.white, title="Lattice Color", group=group_lattice, inline="lattice", tooltip="Color for the lattice lines (horizontals and verticals)")
+lattice_width = input.int(1, title="Width", minval=1, group=group_lattice, inline="lattice", tooltip="Width for the lattice lines")
+lattice_style = input.string("Dotted", title="Style", options=["Solid", "Dashed", "Dotted"], group=group_lattice, inline="lattice", tooltip="Style for the lattice lines")
+
+// ═══════════════════════════════════════════════════════════════════
+// Style Mappings
+// ═══════════════════════════════════════════════════════════════════
+pitch_style = switch line_style
+    "Solid" => line.style_solid
+    "Dashed" => line.style_dashed
+    "Dotted" => line.style_dotted
+
+reaction_line_style = switch reaction_style
+    "Solid" => line.style_solid
+    "Dashed" => line.style_dashed
+    "Dotted" => line.style_dotted
+
+action_line_style = switch action_style
+    "Solid" => line.style_solid
+    "Dashed" => line.style_dashed
+    "Dotted" => line.style_dotted
+
+lattice_line_style = switch lattice_style
+    "Solid" => line.style_solid
+    "Dashed" => line.style_dashed
+    "Dotted" => line.style_dotted
+
+label_size = switch pivot_label_size
+    "Tiny" => size.tiny
+    "Small" => size.small
+    "Normal" => size.normal
+    "Large" => size.large
+
+// Get Bar Indices
+pivotA_x = ta.valuewhen(time == pivotA_time, bar_index, 0)
+pivotB_x = ta.valuewhen(time == pivotB_time, bar_index, 0)
+pivotC_x = ta.valuewhen(time == pivotC_time, bar_index, 0)
+
+// Get raw prices (both high and low at each timestamp for auto-detection)
+float rawA_high = ta.valuewhen(time == pivotA_time, high, 0)
+float rawA_low = ta.valuewhen(time == pivotA_time, low, 0)
+float rawB_high = ta.valuewhen(time == pivotB_time, high, 0)
+float rawB_low = ta.valuewhen(time == pivotB_time, low, 0)
+float rawC_high = ta.valuewhen(time == pivotC_time, high, 0)
+float rawC_low = ta.valuewhen(time == pivotC_time, low, 0)
+
+// Determine pivot types (auto-detect or manual)
+string pivotA_type = na
+string pivotB_type = na
+string pivotC_type = na
+
+if start_pivot_type == "Auto"
+    // Calculate pattern strengths
+    // LHL: B should be the high between two lows
+    float lhl_strength = (rawB_high - rawA_low) + (rawB_high - rawC_low)
+    // HLH: B should be the low between two highs
+    float hlh_strength = (rawA_high - rawB_low) + (rawC_high - rawB_low)
+
+    // Choose the stronger pattern (default to LHL if equal)
+    if lhl_strength >= hlh_strength
+        pivotA_type := "Low"
+        pivotB_type := "High"
+        pivotC_type := "Low"
+    else
+        pivotA_type := "High"
+        pivotB_type := "Low"
+        pivotC_type := "High"
+else
+    // Manual mode - use user's selection with alternating pattern
+    pivotA_type := start_pivot_type
+    pivotB_type := start_pivot_type == "Low" ? "High" : "Low"
+    pivotC_type := start_pivot_type
+
+// Get final prices based on determined pivot types
+pivotA_raw = pivotA_type == "High" ? rawA_high : rawA_low
+pivotB_raw = pivotB_type == "High" ? rawB_high : rawB_low
+pivotC_raw = pivotC_type == "High" ? rawC_high : rawC_low
+
+// Apply log transformation if enabled
+pivotA_y = use_log ? math.log(pivotA_raw) : pivotA_raw
+pivotB_y = use_log ? math.log(pivotB_raw) : pivotB_raw
+pivotC_y = use_log ? math.log(pivotC_raw) : pivotC_raw
+
+// Calculate Midpoint of PivotB and PivotC
+mid_x = (pivotB_x + pivotC_x) / 2
+mid_y = (pivotB_y + pivotC_y) / 2
+
+// Determine Anchor based on Pitchfork Type
+float anchor_x = na
+float anchor_y = na
+
+switch pitchfork_type
+    "Original" =>
+        anchor_x := pivotA_x
+        anchor_y := pivotA_y
+    "Schiff" =>
+        anchor_x := pivotA_x
+        anchor_y := pivotA_y + 0.5 * (pivotB_y - pivotA_y)
+    "Modified Schiff" =>
+        anchor_x := pivotA_x + 0.5 * (pivotB_x - pivotA_x)
+        anchor_y := pivotA_y + 0.5 * (pivotB_y - pivotA_y)
+
+// Calculate Median Line Slope (through midpoint of B-C)
+float slope_ml = mid_x != anchor_x ? (mid_y - anchor_y) / (mid_x - anchor_x) : na
+
+// Calculate Reaction Slope (B to C)
+slope_trans = pivotC_x != pivotB_x ? (pivotC_y - pivotB_y) / (pivotC_x - pivotB_x) : na
+
+// Calculate Action Slope (A to B)
+slope_action = pivotB_x != pivotA_x ? (pivotB_y - pivotA_y) / (pivotB_x - pivotA_x) : na
+
+// Determine upper and lower tines based on pivot positions
+float upper_x = pivotB_x
+float upper_y = pivotB_y
+float lower_x = pivotC_x
+float lower_y = pivotC_y
+if pivotB_y < pivotC_y
+    upper_x := pivotC_x
+    upper_y := pivotC_y
+    lower_x := pivotB_x
+    lower_y := pivotB_y
+
+// Function to calculate intersection x
+f_intersect_x(float s1, float px1, float py1, float s2, float px2, float py2) =>
+    s1 == s2 ? na : (py2 - py1 + s1 * px1 - s2 * px2) / (s1 - s2)
+
+// Function to calculate Y value of a line at a given bar index
+f_line_y_at_bar(float start_x, float start_y, float slope, float bar_idx) =>
+    start_y + slope * (bar_idx - start_x)
+
+// Function to detect if price crossed a line between previous and current bar
+f_price_crossed_line(float prev_price, float curr_price, float prev_line_y, float curr_line_y) =>
+    not na(prev_price) and not na(curr_price) and not na(prev_line_y) and not na(curr_line_y) and
+     ((prev_price < prev_line_y and curr_price >= curr_line_y) or
+     (prev_price > prev_line_y and curr_price <= curr_line_y))
+
+// Function to draw a line with extend direction
+f_draw_line(float start_x, float start_y, color col, int wid, st, float min_x, float max_x, float all_min_x) =>
+    float x1 = na
+    float y1 = na
+    float x2 = na
+    float y2 = na
+    switch extend_dir
+        "Right" =>
+            x1 := start_x
+            y1 := start_y
+            x2 := max_x
+            y2 := start_y + slope_ml * (x2 - x1)
+            float draw_y1 = use_log ? math.exp(y1) : y1
+            float draw_y2 = use_log ? math.exp(y2) : y2
+            line.new(int(math.round(x1)), draw_y1, int(math.round(x2)), draw_y2, extend=extend.right, color=col, width=wid, style=st)
+
+        "Both" =>
+            x1 := math.max(min_x, all_min_x)
+            y1 := start_y + slope_ml * (x1 - start_x)
+            x2 := max_x
+            y2 := start_y + slope_ml * (x2 - start_x)
+            float draw_y1 = use_log ? math.exp(y1) : y1
+            float draw_y2 = use_log ? math.exp(y2) : y2
+            line.new(int(math.round(x1)), draw_y1, int(math.round(x2)), draw_y2, extend=extend.both, color=col, width=wid, style=st)
+
+// Function to draw tine lines (parallels) starting from intersection with transversal
+f_draw_tine(float px, float py, color col, int wid, st, float min_x, float max_x, float all_min_x, float slope_t) =>
+    float int_x = f_intersect_x(slope_t, pivotB_x, pivotB_y, slope_ml, px, py)
+    float int_y = na(int_x) ? na : slope_t * (int_x - pivotB_x) + pivotB_y
+    if not na(int_x)
+        // If intersection is before bar 0, recalculate from a valid point on the line
+        float draw_x = int_x
+        float draw_y = int_y
+        if int_x < 0
+            draw_x := 0
+            draw_y := py + slope_ml * (draw_x - px)
+        f_draw_line(draw_x, draw_y, col, wid, st, min_x, max_x, all_min_x)
+
+// Draw only once
+var bool drawn = false
+
+float max_x = last_bar_index + MAX_BAR_EXTENSION
+float min_x = 0.0
+
+// Common for all lines
+all_min_x = math.min(anchor_x, math.min(pivotB_x, pivotC_x))
+all_max_x = math.max(anchor_x, math.max(pivotB_x, pivotC_x))
+
+// Effective extra levels (persisted for alert section)
+var int effective_extra_upper = 0
+var int effective_extra_lower = 0
+
+if not drawn and not na(anchor_x) and not na(slope_ml)
+    drawn := true
+
+    // Draw Pivot Labels (A, B, C)
+    if show_pivot_labels
+        // Determine label styles based on pivot types
+        // Low pivot = label above (label_up), High pivot = label below (label_down)
+        style_A = pivotA_type == "Low" ? label.style_label_up : label.style_label_down
+        style_B = pivotB_type == "Low" ? label.style_label_up : label.style_label_down
+        style_C = pivotC_type == "Low" ? label.style_label_up : label.style_label_down
+
+        // Determine colors based on pivot types (High=labelColorH, Low=labelColorL)
+        color_A = pivotA_type == "High" ? labelColorH : labelColorL
+        color_B = pivotB_type == "High" ? labelColorH : labelColorL
+        color_C = pivotC_type == "High" ? labelColorH : labelColorL
+
+        // Get actual Y values (convert from log if needed)
+        // Label A uses original pivot position (not shifted anchor for Schiff modes)
+        float y_A = use_log ? math.exp(pivotA_y) : pivotA_y
+        float y_B = use_log ? math.exp(pivotB_y) : pivotB_y
+        float y_C = use_log ? math.exp(pivotC_y) : pivotC_y
+
+        // Label A (at original pivot position, not shifted anchor)
+        label.new(int(pivotA_x), y_A, "A",
+            style=style_A,
+            color=color.new(color_A, 100),
+            textcolor=color_A,
+            size=label_size,
+            text_font_family=font.family_monospace)
+
+        // Label B
+        label.new(int(pivotB_x), y_B, "B",
+            style=style_B,
+            color=color.new(color_B, 100),
+            textcolor=color_B,
+            size=label_size,
+            text_font_family=font.family_monospace)
+
+        // Label C
+        label.new(int(pivotC_x), y_C, "C",
+            style=style_C,
+            color=color.new(color_C, 100),
+            textcolor=color_C,
+            size=label_size,
+            text_font_family=font.family_monospace)
+
+    // Draw Median Line
+    f_draw_line(anchor_x, anchor_y, line_color, line_width, pitch_style, min_x, max_x, all_min_x)
+    
+    // Calculate offsets for extra parallels
+    float median_y_upper = anchor_y + slope_ml * (upper_x - anchor_x)
+    float offset_up = upper_y - median_y_upper
+    float median_y_lower = anchor_y + slope_ml * (lower_x - anchor_x)
+    float offset_lo = lower_y - median_y_lower
+
+    // Calculate effective extra levels based on price range
+    if enable_price_range
+        // Convert price range to log space if needed
+        float range_min_y = use_log ? math.log(math.max(price_range_min, 0.0001)) : price_range_min
+        float range_max_y = use_log ? math.log(price_range_max) : price_range_max
+
+        // Calculate how many upper levels fit within range
+        effective_extra_upper := extra_levels
+        if offset_up != 0 and extra_levels > 0
+            if offset_up > 0
+                // Going up - check against max
+                int max_levels = int(math.floor((range_max_y - upper_y) / offset_up))
+                effective_extra_upper := math.max(0, math.min(extra_levels, max_levels))
+            else
+                // Going down - check against min
+                int max_levels = int(math.floor((upper_y - range_min_y) / math.abs(offset_up)))
+                effective_extra_upper := math.max(0, math.min(extra_levels, max_levels))
+
+        // Calculate how many lower levels fit within range
+        effective_extra_lower := extra_levels
+        if offset_lo != 0 and extra_levels > 0
+            if offset_lo < 0
+                // Going down - check against min
+                int max_levels = int(math.floor((lower_y - range_min_y) / math.abs(offset_lo)))
+                effective_extra_lower := math.max(0, math.min(extra_levels, max_levels))
+            else
+                // Going up - check against max
+                int max_levels = int(math.floor((range_max_y - lower_y) / offset_lo))
+                effective_extra_lower := math.max(0, math.min(extra_levels, max_levels))
+    else
+        // No filtering - use all requested levels
+        effective_extra_upper := extra_levels
+        effective_extra_lower := extra_levels
+
+    // Draw Default Upper and Lower Parallels using tine function
+    if not na(slope_trans)
+        f_draw_tine(upper_x, upper_y, line_color, line_width, pitch_style, min_x, max_x, all_min_x, slope_trans)
+        f_draw_tine(lower_x, lower_y, line_color, line_width, pitch_style, min_x, max_x, all_min_x, slope_trans)
+
+    // Draw Extra Parallels - using transversal intersection like default parallels
+    if not na(slope_trans)
+        // Upper extra parallels (use effective_extra_upper)
+        if effective_extra_upper > 0
+            for i = 1 to effective_extra_upper
+                float extra_up_y = upper_y + float(i) * offset_up
+                f_draw_tine(upper_x, extra_up_y, line_color, line_width, pitch_style, min_x, max_x, all_min_x, slope_trans)
+        // Lower extra parallels (use effective_extra_lower)
+        if effective_extra_lower > 0
+            for i = 1 to effective_extra_lower
+                float extra_lo_y = lower_y + float(i) * offset_lo
+                f_draw_tine(lower_x, extra_lo_y, line_color, line_width, pitch_style, min_x, max_x, all_min_x, slope_trans)
+    
+    // Compute pitchfork start points for lattice
+    array<float> pitch_x = array.new<float>()
+    array<float> pitch_y = array.new<float>()
+    pitch_x.push(anchor_x)
+    pitch_y.push(anchor_y)
+    // Upper tine start
+    float upper_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, upper_x, upper_y)
+    float upper_start_y = na(upper_start_x) ? na : slope_trans * (upper_start_x - pivotB_x) + pivotB_y
+    pitch_x.push(upper_start_x)
+    pitch_y.push(upper_start_y)
+    // Lower tine start
+    float lower_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, lower_x, lower_y)
+    float lower_start_y = na(lower_start_x) ? na : slope_trans * (lower_start_x - pivotB_x) + pivotB_y
+    pitch_x.push(lower_start_x)
+    pitch_y.push(lower_start_y)
+    // Compute extra parallel start points (use effective limits)
+    if effective_extra_upper > 0
+        for i = 1 to effective_extra_upper
+            float extra_up_y = upper_y + float(i) * offset_up
+            float ex_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, upper_x, extra_up_y)
+            float ex_start_y = na(ex_start_x) ? na : slope_trans * (ex_start_x - pivotB_x) + pivotB_y
+            pitch_x.push(ex_start_x)
+            pitch_y.push(ex_start_y)
+    if effective_extra_lower > 0
+        for i = 1 to effective_extra_lower
+            float extra_lo_y = lower_y + float(i) * offset_lo
+            float ex_lo_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, lower_x, extra_lo_y)
+            float ex_lo_start_y = na(ex_lo_start_x) ? na : slope_trans * (ex_lo_start_x - pivotB_x) + pivotB_y
+            pitch_x.push(ex_lo_start_x)
+            pitch_y.push(ex_lo_start_y)
+    
+    // Compute outer for grid height (use effective limits)
+    float eff_upper_y = upper_y + effective_extra_upper * offset_up
+    float outer_upper_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, upper_x, eff_upper_y)
+    float outer_upper_start_y = na(outer_upper_start_x) ? na : slope_trans * (outer_upper_start_x - pivotB_x) + pivotB_y
+    float eff_lower_y = lower_y + effective_extra_lower * offset_lo
+    float outer_lower_start_x = f_intersect_x(slope_trans, pivotB_x, pivotB_y, slope_ml, lower_x, eff_lower_y)
+    float outer_lower_start_y = na(outer_lower_start_x) ? na : slope_trans * (outer_lower_start_x - pivotB_x) + pivotB_y
+    
+    // Compute propagation start points (used for both action and reaction)
+    array<float> prop_x = array.new<float>()
+    array<float> prop_y = array.new<float>()
+    handle_dx = mid_x - anchor_x
+    handle_dy = mid_y - anchor_y
+    handle_len = math.sqrt(math.pow(handle_dx, 2) + math.pow(handle_dy, 2))
+
+    // Always calculate auto baseline first (lines to reach current bar)
+    int auto_forward_count = 0
+    if handle_dx != 0
+        float bars_to_current = last_bar_index - anchor_x
+        auto_forward_count := int(math.ceil(math.abs(bars_to_current / handle_dx)))
+        auto_forward_count := math.max(1, auto_forward_count)
+
+    // Apply offset: positive adds beyond current bar, negative removes from baseline
+    int effective_forward_count = math.max(1, auto_forward_count + forward_count)
+
+    if handle_len > 0
+        ux = handle_dx / handle_len
+        uy = handle_dy / handle_len
+        // Backward
+        if backward_count > 0
+            for i = 0 to backward_count
+                int k = -i
+                float p_dx = float(k) * handle_len * ux
+                float p_dy = float(k) * handle_len * uy
+                float p_x = anchor_x + p_dx
+                float p_y = anchor_y + p_dy
+                prop_x.push(p_x)
+                prop_y.push(p_y)
+        // Forward (uses effective count - 0 means auto-extend to current bar)
+        for i = 1 to effective_forward_count
+            int k = i
+            float p_dx = float(k) * handle_len * ux
+            float p_dy = float(k) * handle_len * uy
+            float p_x = anchor_x + p_dx
+            float p_y = anchor_y + p_dy
+            prop_x.push(p_x)
+            prop_y.push(p_y)
+    
+    // Action / Reaction Transversal Lines
+    if draw_type != "None" and handle_len > 0
+        // Use eff_upper_y and eff_lower_y already computed above
+        // Draw using propagation points
+        for i = 0 to array.size(prop_x) - 1
+            float p_x = array.get(prop_x, i)
+            float p_y = array.get(prop_y, i)
+            // Reaction
+            if (draw_type == "Reaction Only" or draw_type == "Both") and not na(slope_trans)
+                // Intersection with Upper
+                upper_ix = f_intersect_x(slope_trans, p_x, p_y, slope_ml, upper_x, eff_upper_y)
+                upper_iy = na(upper_ix) ? na : slope_trans * (upper_ix - p_x) + p_y
+                // Intersection with Lower
+                lower_ix = f_intersect_x(slope_trans, p_x, p_y, slope_ml, lower_x, eff_lower_y)
+                lower_iy = na(lower_ix) ? na : slope_trans * (lower_ix - p_x) + p_y
+                // Clip to allowed range
+                if not na(upper_ix)
+                    upper_ix := math.max(min_x, math.min(max_x, upper_ix))
+                    upper_iy := slope_trans * (upper_ix - p_x) + p_y
+                if not na(lower_ix)
+                    lower_ix := math.max(min_x, math.min(max_x, lower_ix))
+                    lower_iy := slope_trans * (lower_ix - p_x) + p_y
+                // Draw segment if valid
+                if not na(upper_ix) and not na(lower_ix) and upper_ix != lower_ix
+                    float draw_upper_iy = use_log ? math.exp(upper_iy) : upper_iy
+                    float draw_lower_iy = use_log ? math.exp(lower_iy) : lower_iy
+                    line.new(int(math.round(upper_ix)), draw_upper_iy, int(math.round(lower_ix)), draw_lower_iy, extend=extend.none, color=reaction_color, width=reaction_width, style=reaction_line_style)
+            // Action
+            if (draw_type == "Action Only" or draw_type == "Both") and not na(slope_action)
+                // Intersection with Upper
+                upper_ix = f_intersect_x(slope_action, p_x, p_y, slope_ml, upper_x, eff_upper_y)
+                upper_iy = na(upper_ix) ? na : slope_action * (upper_ix - p_x) + p_y
+                // Intersection with Lower
+                lower_ix = f_intersect_x(slope_action, p_x, p_y, slope_ml, lower_x, eff_lower_y)
+                lower_iy = na(lower_ix) ? na : slope_action * (lower_ix - p_x) + p_y
+                // Clip to allowed range
+                if not na(upper_ix)
+                    upper_ix := math.max(min_x, math.min(max_x, upper_ix))
+                    upper_iy := slope_action * (upper_ix - p_x) + p_y
+                if not na(lower_ix)
+                    lower_ix := math.max(min_x, math.min(max_x, lower_ix))
+                    lower_iy := slope_action * (lower_ix - p_x) + p_y
+                // Draw segment if valid
+                if not na(upper_ix) and not na(lower_ix) and upper_ix != lower_ix
+                    float draw_upper_iy = use_log ? math.exp(upper_iy) : upper_iy
+                    float draw_lower_iy = use_log ? math.exp(lower_iy) : lower_iy
+                    line.new(int(math.round(upper_ix)), draw_upper_iy, int(math.round(lower_ix)), draw_lower_iy, extend=extend.none, color=action_color, width=action_width, style=action_line_style)
+    
+    // Lattice
+    if draw_lattice
+        float horiz_y = na
+        float pivot_x = na
+        switch lattice_pivot
+            "A" =>
+                // Use original pivot A position (not shifted anchor for Schiff modes)
+                horiz_y := pivotA_y
+                pivot_x := pivotA_x
+            "B" =>
+                horiz_y := pivotB_y
+                pivot_x := pivotB_x
+            "C" =>
+                horiz_y := pivotC_y
+                pivot_x := pivotC_x
+        array<float> all_inter_xs = array.new<float>()
+        array<float> inter_xs = array.new<float>()
+        // Pitchfork intersections if selected
+        if lattice_source == "Pitchfork & Parallels"
+            for p = 0 to array.size(pitch_x) - 1
+                float sx = array.get(pitch_x, p)
+                float sy = array.get(pitch_y, p)
+                if slope_ml != 0
+                    float ix = sx + (horiz_y - sy) / slope_ml
+                    if not na(ix)
+                        array.push(inter_xs, ix)
+        // Reaction intersections if selected
+        if lattice_source == "Reaction Lines" or lattice_source == "Action & Reaction"
+            for r = 0 to array.size(prop_x) - 1
+                float px = array.get(prop_x, r)
+                float py = array.get(prop_y, r)
+                if slope_trans != 0
+                    float ix = px + (horiz_y - py) / slope_trans
+                    if not na(ix)
+                        array.push(inter_xs, ix)
+        // Action intersections if selected
+        if lattice_source == "Action Lines" or lattice_source == "Action & Reaction"
+            for r = 0 to array.size(prop_x) - 1
+                float px = array.get(prop_x, r)
+                float py = array.get(prop_y, r)
+                if slope_action != 0
+                    float ix = px + (horiz_y - py) / slope_action
+                    if not na(ix)
+                        array.push(inter_xs, ix)
+        // Draw horizontal if intersections exist
+        if array.size(inter_xs) > 0
+            array<float> filtered_inter_xs = array.new<float>()
+            for f = 0 to array.size(inter_xs) - 1
+                float f_ix = array.get(inter_xs, f)
+                // Filter by chart boundaries instead of pivot_x for Schiff compatibility
+                if f_ix >= 0 and f_ix <= max_x
+                    array.push(filtered_inter_xs, f_ix)
+            if array.size(filtered_inter_xs) > 0
+                float max_inter = array.max(filtered_inter_xs)
+                float min_inter = array.min(filtered_inter_xs)
+
+                // Clamp horizontal to pitchfork envelope (outermost parallels)
+                // Recalculate offsets and effective bounds
+                float lat_median_y_upper = anchor_y + slope_ml * (upper_x - anchor_x)
+                float lat_offset_up = upper_y - lat_median_y_upper
+                float lat_median_y_lower = anchor_y + slope_ml * (lower_x - anchor_x)
+                float lat_offset_lo = lower_y - lat_median_y_lower
+                float lat_eff_upper_y = upper_y + effective_extra_upper * lat_offset_up
+                float lat_eff_lower_y = lower_y + effective_extra_lower * lat_offset_lo
+
+                // Calculate where horizontal intersects envelope bounds
+                if not na(slope_ml) and slope_ml != 0
+                    float upper_bound_x = upper_x + (horiz_y - lat_eff_upper_y) / slope_ml
+                    float lower_bound_x = lower_x + (horiz_y - lat_eff_lower_y) / slope_ml
+
+                    // Find the valid envelope boundary (closer intersection to the right of pivot_x)
+                    float envelope_max_x = na
+                    if upper_bound_x >= pivot_x and lower_bound_x >= pivot_x
+                        envelope_max_x := math.min(upper_bound_x, lower_bound_x)
+                    else if upper_bound_x >= pivot_x
+                        envelope_max_x := upper_bound_x
+                    else if lower_bound_x >= pivot_x
+                        envelope_max_x := lower_bound_x
+                    else
+                        // Both bounds are to the left of pivot_x
+                        // Horizontal is entirely outside envelope, clamp to pivot_x
+                        envelope_max_x := pivot_x
+
+                    // Calculate clamped position for horizontal line drawing only
+                    // Keep max_inter unchanged for vertical intersection calculations
+                    float draw_max_x = max_inter
+                    if not na(envelope_max_x)
+                        draw_max_x := math.min(max_inter, envelope_max_x)
+
+                    // Start horizontal from selected pivot, extend only to the right
+                    float horiz_start_x = pivot_x
+                    if int(math.round(draw_max_x)) <= last_bar_index + MAX_BAR_EXTENSION and int(math.round(horiz_start_x)) <= last_bar_index + MAX_BAR_EXTENSION
+                        float draw_horiz_y = use_log ? math.exp(horiz_y) : horiz_y
+                        line.new(int(math.round(horiz_start_x)), draw_horiz_y, int(math.round(draw_max_x)), draw_horiz_y, color=lattice_color, width=lattice_width, style=lattice_line_style)
+            // Collect for verticals
+            for ii = 0 to array.size(inter_xs) - 1
+                array.push(all_inter_xs, array.get(inter_xs, ii))
+        // Unique intersection xs
+        if array.size(all_inter_xs) > 0
+            array.sort(all_inter_xs)
+            array<float> unique_xs = array.new<float>()
+            float last = array.get(all_inter_xs, 0)
+            array.push(unique_xs, last)
+            for uu = 1 to array.size(all_inter_xs) - 1
+                float curr = array.get(all_inter_xs, uu)
+                if curr != last
+                    array.push(unique_xs, curr)
+                    last := curr
+            // Draw verticals - only at or to the right of selected pivot
+            for vv = 0 to array.size(unique_xs) - 1
+                float v_x = array.get(unique_xs, vv)
+                if v_x >= pivot_x and v_x >= min_x and v_x <= max_x
+                    // NA check for outer coordinates (required for Schiff modes)
+                    if not na(outer_upper_start_x) and not na(outer_lower_start_x)
+                        float y_max = outer_upper_start_y + slope_ml * (v_x - outer_upper_start_x)
+                        float y_min = outer_lower_start_y + slope_ml * (v_x - outer_lower_start_x)
+                        float top = math.max(y_min, y_max)
+                        float bot = math.min(y_min, y_max)
+                        float draw_top = use_log ? math.exp(top) : top
+                        float draw_bot = use_log ? math.exp(bot) : bot
+                        line.new(int(math.round(v_x)), draw_bot, int(math.round(v_x)), draw_top, color=lattice_color, width=lattice_width, style=lattice_line_style)
+
+// ═══════════════════════════════════════════════════════════════════
+// Alert Crossing Detection (runs every bar)
+// ═══════════════════════════════════════════════════════════════════
+
+// Get price in log space if needed
+float price_y = use_log ? math.log(close) : close
+float prev_price_y = use_log ? math.log(close[1]) : close[1]
+
+// Calculate offsets for parallels (same formula as drawing section)
+float median_y_at_upper = anchor_y + slope_ml * (upper_x - anchor_x)
+float alert_offset_up = upper_y - median_y_at_upper
+float median_y_at_lower = anchor_y + slope_ml * (lower_x - anchor_x)
+float alert_offset_lo = lower_y - median_y_at_lower
+
+// Crossing flags
+bool crossed_pitchfork = false
+bool crossed_action = false
+bool crossed_reaction = false
+bool crossed_lattice_h = false
+
+// Detection runs when pitchfork is valid and we're past pivot C
+// (enable_alerts only gates the programmatic alert() calls, not alertcondition())
+if not na(anchor_x) and not na(slope_ml) and bar_index > pivotC_x
+
+    // ─────────────────────────────────────────────────────────────────
+    // Pitchfork Line Crossings (Median + Parallels)
+    // ─────────────────────────────────────────────────────────────────
+    // Always detect pitchfork crossings (median and parallels are always drawn)
+    // Median line
+    float ml_y_curr = f_line_y_at_bar(anchor_x, anchor_y, slope_ml, bar_index)
+    float ml_y_prev = f_line_y_at_bar(anchor_x, anchor_y, slope_ml, bar_index - 1)
+    if f_price_crossed_line(prev_price_y, price_y, ml_y_prev, ml_y_curr)
+        crossed_pitchfork := true
+
+    // Upper parallel (line passing through upper_x, upper_y with slope_ml)
+    float up_y_curr = f_line_y_at_bar(upper_x, upper_y, slope_ml, bar_index)
+    float up_y_prev = f_line_y_at_bar(upper_x, upper_y, slope_ml, bar_index - 1)
+    if f_price_crossed_line(prev_price_y, price_y, up_y_prev, up_y_curr)
+        crossed_pitchfork := true
+
+    // Lower parallel (line passing through lower_x, lower_y with slope_ml)
+    float lo_y_curr = f_line_y_at_bar(lower_x, lower_y, slope_ml, bar_index)
+    float lo_y_prev = f_line_y_at_bar(lower_x, lower_y, slope_ml, bar_index - 1)
+    if f_price_crossed_line(prev_price_y, price_y, lo_y_prev, lo_y_curr)
+        crossed_pitchfork := true
+
+    // Extra upper parallels (use effective limit)
+    if effective_extra_upper > 0
+        for i = 1 to effective_extra_upper
+            float extra_up_ref_y = upper_y + float(i) * alert_offset_up
+            float ex_up_y_curr = f_line_y_at_bar(upper_x, extra_up_ref_y, slope_ml, bar_index)
+            float ex_up_y_prev = f_line_y_at_bar(upper_x, extra_up_ref_y, slope_ml, bar_index - 1)
+            if f_price_crossed_line(prev_price_y, price_y, ex_up_y_prev, ex_up_y_curr)
+                crossed_pitchfork := true
+
+    // Extra lower parallels (use effective limit)
+    if effective_extra_lower > 0
+        for i = 1 to effective_extra_lower
+            float extra_lo_ref_y = lower_y + float(i) * alert_offset_lo
+            float ex_lo_y_curr = f_line_y_at_bar(lower_x, extra_lo_ref_y, slope_ml, bar_index)
+            float ex_lo_y_prev = f_line_y_at_bar(lower_x, extra_lo_ref_y, slope_ml, bar_index - 1)
+            if f_price_crossed_line(prev_price_y, price_y, ex_lo_y_prev, ex_lo_y_curr)
+                crossed_pitchfork := true
+
+    // ─────────────────────────────────────────────────────────────────
+    // Action/Reaction Line Crossings
+    // ─────────────────────────────────────────────────────────────────
+    // Calculate propagation points (same as drawing section)
+    float alert_handle_dx = mid_x - anchor_x
+    float alert_handle_dy = mid_y - anchor_y
+    float alert_handle_len = math.sqrt(math.pow(alert_handle_dx, 2) + math.pow(alert_handle_dy, 2))
+
+    // Always calculate auto baseline for alerts (same logic as drawing)
+    int auto_alert_forward = 0
+    if alert_handle_dx != 0
+        float alert_bars_to_current = last_bar_index - anchor_x
+        auto_alert_forward := int(math.ceil(math.abs(alert_bars_to_current / alert_handle_dx)))
+        auto_alert_forward := math.max(1, auto_alert_forward)
+
+    // Apply offset
+    int alert_effective_forward = math.max(1, auto_alert_forward + forward_count)
+
+    if alert_handle_len > 0 and draw_type != "None"
+        float alert_ux = alert_handle_dx / alert_handle_len
+        float alert_uy = alert_handle_dy / alert_handle_len
+
+        // Calculate effective outer bounds for line segments (use effective limits)
+        float eff_up_y = upper_y + effective_extra_upper * alert_offset_up
+        float eff_lo_y = lower_y + effective_extra_lower * alert_offset_lo
+
+        // Check backward propagation lines
+        if backward_count > 0
+            for i = 0 to backward_count
+                int k = -i
+                float p_x = anchor_x + float(k) * alert_handle_len * alert_ux
+                float p_y = anchor_y + float(k) * alert_handle_len * alert_uy
+
+                // Reaction line crossing
+                if (draw_type == "Reaction Only" or draw_type == "Both") and not na(slope_trans)
+                    float rx_upper = f_intersect_x(slope_trans, p_x, p_y, slope_ml, upper_x, eff_up_y)
+                    float rx_lower = f_intersect_x(slope_trans, p_x, p_y, slope_ml, lower_x, eff_lo_y)
+                    if not na(rx_upper) and not na(rx_lower)
+                        float seg_min_x = math.min(rx_upper, rx_lower)
+                        float seg_max_x = math.max(rx_upper, rx_lower)
+                        if bar_index >= seg_min_x and bar_index <= seg_max_x
+                            float ry_curr = p_y + slope_trans * (bar_index - p_x)
+                            float ry_prev = p_y + slope_trans * (bar_index - 1 - p_x)
+                            if f_price_crossed_line(prev_price_y, price_y, ry_prev, ry_curr)
+                                crossed_reaction := true
+
+                // Action line crossing
+                if (draw_type == "Action Only" or draw_type == "Both") and not na(slope_action)
+                    float ax_upper = f_intersect_x(slope_action, p_x, p_y, slope_ml, upper_x, eff_up_y)
+                    float ax_lower = f_intersect_x(slope_action, p_x, p_y, slope_ml, lower_x, eff_lo_y)
+                    if not na(ax_upper) and not na(ax_lower)
+                        float seg_min_x = math.min(ax_upper, ax_lower)
+                        float seg_max_x = math.max(ax_upper, ax_lower)
+                        if bar_index >= seg_min_x and bar_index <= seg_max_x
+                            float ay_curr = p_y + slope_action * (bar_index - p_x)
+                            float ay_prev = p_y + slope_action * (bar_index - 1 - p_x)
+                            if f_price_crossed_line(prev_price_y, price_y, ay_prev, ay_curr)
+                                crossed_action := true
+
+        // Check forward propagation lines (uses effective count - 0 means auto-extend)
+        for i = 1 to alert_effective_forward
+            int k = i
+            float p_x = anchor_x + float(k) * alert_handle_len * alert_ux
+            float p_y = anchor_y + float(k) * alert_handle_len * alert_uy
+
+            // Reaction line crossing
+            if (draw_type == "Reaction Only" or draw_type == "Both") and not na(slope_trans)
+                float rx_upper = f_intersect_x(slope_trans, p_x, p_y, slope_ml, upper_x, eff_up_y)
+                float rx_lower = f_intersect_x(slope_trans, p_x, p_y, slope_ml, lower_x, eff_lo_y)
+                if not na(rx_upper) and not na(rx_lower)
+                    float seg_min_x = math.min(rx_upper, rx_lower)
+                    float seg_max_x = math.max(rx_upper, rx_lower)
+                    if bar_index >= seg_min_x and bar_index <= seg_max_x
+                        float ry_curr = p_y + slope_trans * (bar_index - p_x)
+                        float ry_prev = p_y + slope_trans * (bar_index - 1 - p_x)
+                        if f_price_crossed_line(prev_price_y, price_y, ry_prev, ry_curr)
+                            crossed_reaction := true
+
+            // Action line crossing
+            if (draw_type == "Action Only" or draw_type == "Both") and not na(slope_action)
+                float ax_upper = f_intersect_x(slope_action, p_x, p_y, slope_ml, upper_x, eff_up_y)
+                float ax_lower = f_intersect_x(slope_action, p_x, p_y, slope_ml, lower_x, eff_lo_y)
+                if not na(ax_upper) and not na(ax_lower)
+                    float seg_min_x = math.min(ax_upper, ax_lower)
+                    float seg_max_x = math.max(ax_upper, ax_lower)
+                    if bar_index >= seg_min_x and bar_index <= seg_max_x
+                        float ay_curr = p_y + slope_action * (bar_index - p_x)
+                        float ay_prev = p_y + slope_action * (bar_index - 1 - p_x)
+                        if f_price_crossed_line(prev_price_y, price_y, ay_prev, ay_curr)
+                            crossed_action := true
+
+    // ─────────────────────────────────────────────────────────────────
+    // Lattice Horizontal Crossing (only when lattice is drawn)
+    // ─────────────────────────────────────────────────────────────────
+    if draw_lattice
+        float lattice_horiz_y = switch lattice_pivot
+            "A" => pivotA_y  // Use original pivot, not shifted anchor
+            "B" => pivotB_y
+            "C" => pivotC_y
+
+        if not na(lattice_horiz_y)
+            // For horizontal line, Y is constant at all bar positions
+            if f_price_crossed_line(prev_price_y, price_y, lattice_horiz_y, lattice_horiz_y)
+                crossed_lattice_h := true
+
+// ═══════════════════════════════════════════════════════════════════
+// Alert Conditions (for TradingView alert dialog)
+// ═══════════════════════════════════════════════════════════════════
+// To create alerts: Right-click indicator → Create Alert → Select condition
+
+alertcondition(crossed_pitchfork,
+    title="Pitchfork Line Crossing",
+    message="Price crossed a pitchfork line (median or parallel)")
+
+alertcondition(crossed_action,
+    title="Action Line Crossing",
+    message="Price crossed an action line")
+
+alertcondition(crossed_reaction,
+    title="Reaction Line Crossing",
+    message="Price crossed a reaction line")
+
+alertcondition(crossed_lattice_h,
+    title="Lattice Horizontal Crossing",
+    message="Price crossed lattice horizontal")
+
+alertcondition(crossed_pitchfork or crossed_action or crossed_reaction or crossed_lattice_h,
+    title="Any Line Crossing",
+    message="Price crossed a pitchfork, action, reaction, or lattice line")

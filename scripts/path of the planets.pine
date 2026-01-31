@@ -1,0 +1,764 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • PATH OF THE PLANETS
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Visualizes planetary longitudes and declinations across
+//               time. Supports geocentric and heliocentric modes with
+//               future projections up to 500 bars.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0
+// @version      2.0 (January 2026)
+//
+// @theory       Uses VSOP87, ELP2000-82, and Meeus algorithms via
+//               Blueprint Research ephemeris libraries.
+//
+// @features     • Geocentric and heliocentric longitudes for all planets
+//               • Declination line plots with distinct colors
+//               • Future projections up to 500 bars
+//               • Positions table with current values
+//
+// @open_source  Part of an open-source alternative to proprietary
+//               astronomical libraries.
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025-2026 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0
+// ════════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("Path of the Planets", overlay=true, max_bars_back=500, max_polylines_count=100, scale=scale.left)
+import BlueprintResearch/lib_ephemeris/1 as eph
+
+// General Settings
+high_low_bar_time = input.time(0, "Select Date Time", confirm=true, group="General Settings")
+mirror_in = input.bool(false, "Mirror Longitude", group="General Settings")
+shiftLongitudeCycles = input.int(0, "Longitude Shift (multiples of 360°)", minval=-5, maxval=5, group="General Settings")
+longitudeShift = shiftLongitudeCycles * 360
+show_table = input.bool(true, "Show Positions Table", group="General Settings")
+
+// Line Width Settings
+group_lines = "Line Settings"
+longitude_linewidth = input.int(2, "Longitude Line Width", minval=1, maxval=5, group=group_lines)
+projection_linewidth = input.int(1, "Projection Line Width", minval=1, maxval=5, group=group_lines)
+
+// Inner Planets Longitudes
+group_inner_long = "Inner Planets Longitudes"
+showSun = input.bool(true, "☉ Geo", inline="Sun", group=group_inner_long)
+showSunHelio = input.bool(false, "☉ Helio", inline="Sun", group=group_inner_long)
+showMercury = input.bool(true, "☿ Geo", inline="Mercury", group=group_inner_long)
+showMercuryHelio = input.bool(false, "☿ Helio", inline="Mercury", group=group_inner_long)
+showVenus = input.bool(true, "♀ Geo", inline="Venus", group=group_inner_long)
+showVenusHelio = input.bool(false, "♀ Helio", inline="Venus", group=group_inner_long)
+
+// Outer Planets Longitudes
+group_outer_long = "Outer Planets Longitudes"
+showMars = input.bool(true, "♂ Geo", inline="Mars", group=group_outer_long)
+showMarsHelio = input.bool(false, "♂ Helio", inline="Mars", group=group_outer_long)
+showJupiter = input.bool(true, "♃ Geo", inline="Jupiter", group=group_outer_long)
+showJupiterHelio = input.bool(false, "♃ Helio", inline="Jupiter", group=group_outer_long)
+showSaturn = input.bool(true, "♄ Geo", inline="Saturn", group=group_outer_long)
+showSaturnHelio = input.bool(false, "♄ Helio", inline="Saturn", group=group_outer_long)
+showUranus = input.bool(true, "⛢ Geo", inline="Uranus", group=group_outer_long)
+showUranusHelio = input.bool(false, "⛢ Helio", inline="Uranus", group=group_outer_long)
+showNeptune = input.bool(true, "♆ Geo", inline="Neptune", group=group_outer_long)
+showNeptuneHelio = input.bool(false, "♆ Helio", inline="Neptune", group=group_outer_long)
+showPluto = input.bool(true, "♇ Geo", inline="Pluto", group=group_outer_long)
+showPlutoHelio = input.bool(false, "♇ Helio", inline="Pluto", group=group_outer_long)
+
+// Declinations
+group_dec = "Declinations"
+showMoonDec = input.bool(false, "☽ Moon Dec", group=group_dec)
+showSunDec = input.bool(true, "☉ Sun Dec", group=group_dec)
+showMercuryDec = input.bool(true, "☿ Mercury Dec", group=group_dec)
+showVenusDec = input.bool(true, "♀ Venus Dec", group=group_dec)
+showMarsDec = input.bool(true, "♂ Mars Dec", group=group_dec)
+showJupiterDec = input.bool(true, "♃ Jupiter Dec", group=group_dec)
+showSaturnDec = input.bool(false, "♄ Saturn Dec", group=group_dec)
+showUranusDec = input.bool(false, "⛢ Uranus Dec", group=group_dec)
+showNeptuneDec = input.bool(false, "♆ Neptune Dec", group=group_dec)
+showPlutoDec = input.bool(false, "♇ Pluto Dec", group=group_dec)
+
+// Future Projections
+group_proj = "Future Projections"
+show_projections = input.bool(true, "Enable Future Projections", group=group_proj)
+look_ahead = input.int(250, "Look Ahead Bars", minval=1, maxval=500, group=group_proj)
+show_proj_longitudes = input.bool(true, "Project Longitudes", group=group_proj)
+show_proj_declinations = input.bool(true, "Project Declinations", group=group_proj)
+
+mirror_out = mirror_in ? -1 : 1
+
+// Timestamp to bar index conversion
+timestamp_to_index(_time) =>
+    var int index = na
+    if na(index) and time >= _time
+        index := bar_index
+    index
+
+high_low_bar_index = timestamp_to_index(high_low_bar_time)
+
+// Helper function: Fold longitude to 0-180 range (shortest angular distance from 0°)
+foldTo180(deg) =>
+    float norm = (deg % 360 + 360) % 360  // Normalize to 0-360
+    norm > 180 ? 360 - norm : norm
+
+// Helper function: Get zodiac sign symbol from degree
+f_degsignf(deg) =>
+    float norm = (deg % 360 + 360) % 360
+    int sign_idx = int(math.floor(norm / 30))
+    string sign = switch sign_idx
+        0 => "♈"
+        1 => "♉"
+        2 => "♊"
+        3 => "♋"
+        4 => "♌"
+        5 => "♍"
+        6 => "♎"
+        7 => "♏"
+        8 => "♐"
+        9 => "♑"
+        10 => "♒"
+        11 => "♓"
+        => "?"
+    sign
+
+// Improved high-contrast color palette for visibility
+sunColor    = #FFD700   // Gold (bright)
+moonColor   = #E0E0E0   // Light Gray
+mercColor   = #00BFFF   // Deep Sky Blue
+venusColor  = #FF69B4   // Hot Pink
+marsColor   = #FF4500   // Orange Red
+jupColor    = #FFA500   // Orange (brighter)
+satColor    = #DAA520   // Goldenrod
+uraColor    = #00FFFF   // Cyan
+nepColor    = #9370DB   // Medium Purple
+plutoColor  = #FF00FF   // Magenta (bright, distinct)
+
+
+// Variable declarations
+var float moon_dec          = na 
+var float sun_long          = na 
+var float raw_sun_long      = na 
+var float helio_sun_long    = na 
+var float raw_helio_sun_long= na 
+var float sun_dec           = na 
+
+var float merc_long         = na
+var float raw_merc_long     = na
+var float helio_merc_long   = na
+var float raw_helio_merc_long = na
+var float merc_dec          = na
+
+var float venus_long        = na
+var float raw_venus_long    = na
+var float helio_venus_long  = na
+var float raw_helio_venus_long = na
+var float venus_dec         = na
+
+var float geo_mars_long     = na 
+var float raw_geo_mars_long = na 
+var float helio_mars_long   = na 
+var float raw_helio_mars_long = na 
+var float mars_dec          = na 
+
+var float jup_long          = na 
+var float raw_jup_long      = na 
+var float helio_jup_long    = na
+var float raw_helio_jup_long= na
+var float jup_dec           = na  
+
+var float sat_long          = na 
+var float raw_sat_long      = na 
+var float helio_sat_long    = na 
+var float raw_helio_sat_long= na 
+var float sat_dec           = na 
+
+var float ura_long          = na
+var float raw_ura_long      = na
+var float helio_ura_long    = na
+var float raw_helio_ura_long= na
+var float ura_dec           = na
+
+var float nep_long          = na
+var float raw_nep_long      = na
+var float helio_nep_long    = na
+var float raw_helio_nep_long= na
+var float nep_dec           = na
+
+var float pluto_long        = na
+var float raw_pluto_long    = na
+var float helio_pluto_long  = na
+var float raw_helio_pluto_long = na
+var float pluto_dec         = na
+
+var bool draw_zero = false 
+
+var tbl = table.new(position.bottom_right, 4, 12, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+// Function to get normalized longitude (0-360) and sign string
+f_get_sign_str(_long) =>
+    float norm_long = (_long % 360 + 360) % 360
+    string sign = f_degsignf(norm_long)
+    str.tostring(norm_long, "#.##") + "° " + sign
+
+if (time >= high_low_bar_time)
+    draw_zero := true
+
+    // Sun
+    raw_sun_long       := eph.get_longitude(eph.Planet.Sun, time, true)
+    sun_long           := foldTo180(raw_sun_long) * mirror_out
+    raw_helio_sun_long := eph.get_longitude(eph.Planet.Sun, time, false)
+    helio_sun_long     := foldTo180(raw_helio_sun_long) * mirror_out
+    sun_dec            := eph.get_declination(eph.Planet.Sun, time)
+
+    // Mercury
+    raw_merc_long       := eph.get_longitude(eph.Planet.Mercury, time, true)
+    merc_long           := foldTo180(raw_merc_long) * mirror_out
+    raw_helio_merc_long := eph.get_longitude(eph.Planet.Mercury, time, false)
+    helio_merc_long     := foldTo180(raw_helio_merc_long) * mirror_out
+    merc_dec            := eph.get_declination(eph.Planet.Mercury, time)
+
+    // Venus
+    raw_venus_long       := eph.get_longitude(eph.Planet.Venus, time, true)
+    venus_long           := foldTo180(raw_venus_long) * mirror_out
+    raw_helio_venus_long := eph.get_longitude(eph.Planet.Venus, time, false)
+    helio_venus_long     := foldTo180(raw_helio_venus_long) * mirror_out
+    venus_dec            := eph.get_declination(eph.Planet.Venus, time)
+
+    // Mars
+    raw_geo_mars_long   := eph.get_longitude(eph.Planet.Mars, time, true)
+    geo_mars_long       := foldTo180(raw_geo_mars_long) * mirror_out
+    raw_helio_mars_long := eph.get_longitude(eph.Planet.Mars, time, false)
+    helio_mars_long     := foldTo180(raw_helio_mars_long) * mirror_out
+    mars_dec            := eph.get_declination(eph.Planet.Mars, time)
+
+    // Jupiter
+    raw_jup_long        := eph.get_longitude(eph.Planet.Jupiter, time, true)
+    jup_long            := foldTo180(raw_jup_long) * mirror_out
+    raw_helio_jup_long  := eph.get_longitude(eph.Planet.Jupiter, time, false)
+    helio_jup_long      := foldTo180(raw_helio_jup_long) * mirror_out
+    jup_dec             := eph.get_declination(eph.Planet.Jupiter, time)
+
+    // Saturn
+    raw_sat_long        := eph.get_longitude(eph.Planet.Saturn, time, true)
+    sat_long            := foldTo180(raw_sat_long) * mirror_out
+    raw_helio_sat_long  := eph.get_longitude(eph.Planet.Saturn, time, false)
+    helio_sat_long      := foldTo180(raw_helio_sat_long) * mirror_out
+    sat_dec             := eph.get_declination(eph.Planet.Saturn, time)
+
+    // Uranus
+    raw_ura_long        := eph.get_longitude(eph.Planet.Uranus, time, true)
+    ura_long            := foldTo180(raw_ura_long) * mirror_out
+    raw_helio_ura_long  := eph.get_longitude(eph.Planet.Uranus, time, false)
+    helio_ura_long      := foldTo180(raw_helio_ura_long) * mirror_out
+    ura_dec             := eph.get_declination(eph.Planet.Uranus, time)
+
+    // Neptune
+    raw_nep_long        := eph.get_longitude(eph.Planet.Neptune, time, true)
+    nep_long            := foldTo180(raw_nep_long) * mirror_out
+    raw_helio_nep_long  := eph.get_longitude(eph.Planet.Neptune, time, false)
+    helio_nep_long      := foldTo180(raw_helio_nep_long) * mirror_out
+    nep_dec             := eph.get_declination(eph.Planet.Neptune, time)
+
+    // Pluto
+    raw_pluto_long       := eph.get_longitude(eph.Planet.Pluto, time, true)
+    pluto_long           := foldTo180(raw_pluto_long) * mirror_out
+    raw_helio_pluto_long := eph.get_longitude(eph.Planet.Pluto, time, false)
+    helio_pluto_long     := foldTo180(raw_helio_pluto_long) * mirror_out
+    pluto_dec            := eph.get_declination(eph.Planet.Pluto, time)
+
+    if showMoonDec
+        moon_dec := eph.get_declination(eph.Planet.Moon, time)
+
+    if show_table
+        // Clear table content
+        table.clear(tbl, 0, 0, 3, 11)
+        
+        // Header
+        table.cell(tbl, 0, 0, "Planet", bgcolor=color.gray, text_color=color.white)
+        table.cell(tbl, 1, 0, "Geo", bgcolor=color.gray, text_color=color.white)
+        table.cell(tbl, 2, 0, "Helio", bgcolor=color.gray, text_color=color.white)
+        table.cell(tbl, 3, 0, "Dec", bgcolor=color.gray, text_color=color.white)
+        
+        int row = 1
+        
+        // Moon (only Dec)
+        if showMoonDec
+            table.cell(tbl, 0, row, "☽ Moon", text_color=moonColor)
+            table.cell(tbl, 3, row, str.tostring(moon_dec, "#.##") + "°", text_color=moonColor)
+            row += 1
+        
+        // Sun
+        if showSun or showSunHelio or showSunDec
+            table.cell(tbl, 0, row, "☉ Sun", text_color=sunColor)
+            if showSun
+                table.cell(tbl, 1, row, f_get_sign_str(raw_sun_long + longitudeShift), text_color=sunColor)
+            if showSunHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_sun_long + longitudeShift), text_color=sunColor)
+            if showSunDec
+                table.cell(tbl, 3, row, str.tostring(sun_dec, "#.##") + "°", text_color=sunColor)
+            row += 1
+        
+        // Mercury
+        if showMercury or showMercuryHelio or showMercuryDec
+            table.cell(tbl, 0, row, "☿ Mercury", text_color=mercColor)
+            if showMercury
+                table.cell(tbl, 1, row, f_get_sign_str(raw_merc_long + longitudeShift), text_color=mercColor)
+            if showMercuryHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_merc_long + longitudeShift), text_color=mercColor)
+            if showMercuryDec
+                table.cell(tbl, 3, row, str.tostring(merc_dec, "#.##") + "°", text_color=mercColor)
+            row += 1
+        
+        // Venus
+        if showVenus or showVenusHelio or showVenusDec
+            table.cell(tbl, 0, row, "♀ Venus", text_color=venusColor)
+            if showVenus
+                table.cell(tbl, 1, row, f_get_sign_str(raw_venus_long + longitudeShift), text_color=venusColor)
+            if showVenusHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_venus_long + longitudeShift), text_color=venusColor)
+            if showVenusDec
+                table.cell(tbl, 3, row, str.tostring(venus_dec, "#.##") + "°", text_color=venusColor)
+            row += 1
+
+        // Mars
+        if showMars or showMarsHelio or showMarsDec
+            table.cell(tbl, 0, row, "♂ Mars", text_color=marsColor)
+            if showMars
+                table.cell(tbl, 1, row, f_get_sign_str(raw_geo_mars_long + longitudeShift), text_color=marsColor)
+            if showMarsHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_mars_long + longitudeShift), text_color=marsColor)
+            if showMarsDec
+                table.cell(tbl, 3, row, str.tostring(mars_dec, "#.##") + "°", text_color=marsColor)
+            row += 1
+        
+        // Jupiter
+        if showJupiter or showJupiterHelio or showJupiterDec
+            table.cell(tbl, 0, row, "♃ Jupiter", text_color=jupColor)
+            if showJupiter
+                table.cell(tbl, 1, row, f_get_sign_str(raw_jup_long + longitudeShift), text_color=jupColor)
+            if showJupiterHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_jup_long + longitudeShift), text_color=jupColor)
+            if showJupiterDec
+                table.cell(tbl, 3, row, str.tostring(jup_dec, "#.##") + "°", text_color=jupColor)
+            row += 1
+        
+        // Saturn
+        if showSaturn or showSaturnHelio or showSaturnDec
+            table.cell(tbl, 0, row, "♄ Saturn", text_color=satColor)
+            if showSaturn
+                table.cell(tbl, 1, row, f_get_sign_str(raw_sat_long + longitudeShift), text_color=satColor)
+            if showSaturnHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_sat_long + longitudeShift), text_color=satColor)
+            if showSaturnDec
+                table.cell(tbl, 3, row, str.tostring(sat_dec, "#.##") + "°", text_color=satColor)
+            row += 1
+        
+        // Uranus
+        if showUranus or showUranusHelio or showUranusDec
+            table.cell(tbl, 0, row, "⛢ Uranus", text_color=uraColor)
+            if showUranus
+                table.cell(tbl, 1, row, f_get_sign_str(raw_ura_long + longitudeShift), text_color=uraColor)
+            if showUranusHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_ura_long + longitudeShift), text_color=uraColor)
+            if showUranusDec
+                table.cell(tbl, 3, row, str.tostring(ura_dec, "#.##") + "°", text_color=uraColor)
+            row += 1
+        
+        // Neptune
+        if showNeptune or showNeptuneHelio or showNeptuneDec
+            table.cell(tbl, 0, row, "♆ Neptune", text_color=nepColor)
+            if showNeptune
+                table.cell(tbl, 1, row, f_get_sign_str(raw_nep_long + longitudeShift), text_color=nepColor)
+            if showNeptuneHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_nep_long + longitudeShift), text_color=nepColor)
+            if showNeptuneDec
+                table.cell(tbl, 3, row, str.tostring(nep_dec, "#.##") + "°", text_color=nepColor)
+            row += 1
+        
+        // Pluto
+        if showPluto or showPlutoHelio or showPlutoDec
+            table.cell(tbl, 0, row, "♇ Pluto", text_color=plutoColor)
+            if showPluto
+                table.cell(tbl, 1, row, f_get_sign_str(raw_pluto_long + longitudeShift), text_color=plutoColor)
+            if showPlutoHelio
+                table.cell(tbl, 2, row, f_get_sign_str(raw_helio_pluto_long + longitudeShift), text_color=plutoColor)
+            if showPlutoDec
+                table.cell(tbl, 3, row, str.tostring(pluto_dec, "#.##") + "°", text_color=plutoColor)
+            row += 1
+
+// Plotting
+// PLUTO
+plot(showPluto ? pluto_long + longitudeShift : na, color=plutoColor, title="Pluto Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showPlutoHelio ? helio_pluto_long + longitudeShift : na, color=color.new(plutoColor, 40), title="Helio Pluto Longitude", style=plot.style_circles)
+plot(showPlutoDec ? pluto_dec : na, color=color.new(plutoColor, 70), title="Pluto Dec Fill", style=plot.style_area)
+plot(showPlutoDec ? pluto_dec : na, color=plutoColor, title="Pluto Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// NEPTUNE
+plot(showNeptune ? nep_long + longitudeShift : na, color=nepColor, title="Neptune Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showNeptuneHelio ? helio_nep_long + longitudeShift : na, color=color.new(nepColor, 40), title="Helio Neptune Longitude", style=plot.style_circles)
+plot(showNeptuneDec ? nep_dec : na, color=color.new(nepColor, 70), title="Neptune Dec Fill", style=plot.style_area)
+plot(showNeptuneDec ? nep_dec : na, color=nepColor, title="Neptune Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// URANUS
+plot(showUranus ? ura_long + longitudeShift : na, color=uraColor, title="Uranus Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showUranusHelio ? helio_ura_long + longitudeShift : na, color=color.new(uraColor, 40), title="Helio Uranus Longitude", style=plot.style_circles)
+plot(showUranusDec ? ura_dec : na, color=color.new(uraColor, 70), title="Uranus Dec Fill", style=plot.style_area)
+plot(showUranusDec ? ura_dec : na, color=uraColor, title="Uranus Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// SATURN
+plot(showSaturn ? sat_long + longitudeShift : na, color=satColor, title="Saturn Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showSaturnHelio ? helio_sat_long + longitudeShift : na, color=color.new(satColor, 40), title="Helio Saturn Longitude", style=plot.style_circles)
+plot(showSaturnDec ? sat_dec : na, color=color.new(satColor, 70), title="Saturn Dec Fill", style=plot.style_area)
+plot(showSaturnDec ? sat_dec : na, color=satColor, title="Saturn Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// JUPITER
+plot(showJupiter ? jup_long + longitudeShift : na, color=jupColor, title="Jupiter Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showJupiterHelio ? helio_jup_long + longitudeShift : na, color=color.new(jupColor, 40), title="Helio Jupiter Longitude", style=plot.style_circles)
+plot(showJupiterDec ? jup_dec : na, color=color.new(jupColor, 70), title="Jupiter Dec Fill", style=plot.style_area)
+plot(showJupiterDec ? jup_dec : na, color=jupColor, title="Jupiter Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// MARS
+plot(showMars ? geo_mars_long + longitudeShift : na, color=marsColor, title="Mars Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showMarsHelio ? helio_mars_long + longitudeShift : na, color=color.new(marsColor, 40), title="Helio Mars Longitude", style=plot.style_circles)
+plot(showMarsDec ? mars_dec : na, color=color.new(marsColor, 70), title="Mars Dec Fill", style=plot.style_area)
+plot(showMarsDec ? mars_dec : na, color=marsColor, title="Mars Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// VENUS
+plot(showVenus ? venus_long + longitudeShift : na, color=venusColor, title="Venus Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showVenusHelio ? helio_venus_long + longitudeShift : na, color=color.new(venusColor, 40), title="Helio Venus Longitude", style=plot.style_circles)
+plot(showVenusDec ? venus_dec : na, color=color.new(venusColor, 70), title="Venus Dec Fill", style=plot.style_area)
+plot(showVenusDec ? venus_dec : na, color=venusColor, title="Venus Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// MERCURY
+plot(showMercury ? merc_long + longitudeShift : na, color=mercColor, title="Mercury Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showMercuryHelio ? helio_merc_long + longitudeShift : na, color=color.new(mercColor, 40), title="Helio Mercury Longitude", style=plot.style_circles)
+plot(showMercuryDec ? merc_dec : na, color=color.new(mercColor, 70), title="Mercury Dec Fill", style=plot.style_area)
+plot(showMercuryDec ? merc_dec : na, color=mercColor, title="Mercury Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// SUN
+plot(showSun ? sun_long + longitudeShift : na, color=sunColor, title="Sun Longitude (Geo)", style=plot.style_line, linewidth=longitude_linewidth)
+plot(showSunHelio ? helio_sun_long + longitudeShift : na, color=color.new(sunColor, 40), title="Helio Sun Longitude", style=plot.style_circles)
+plot(showSunDec ? sun_dec : na, color=color.new(sunColor, 70), title="Sun Dec Fill", style=plot.style_area)
+plot(showSunDec ? sun_dec : na, color=sunColor, title="Sun Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// MOON
+plot(showMoonDec ? moon_dec : na, color=color.new(moonColor, 70), title="Moon Dec Fill", style=plot.style_area)
+plot(showMoonDec ? moon_dec : na, color=moonColor, title="Moon Dec Line", style=plot.style_line, linewidth=projection_linewidth)
+
+// Zero Line
+plot(draw_zero ? 0.0 : na, "Zero Declination", color=color.gray)
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projections
+// ═══════════════════════════════════════════════════════════════════
+
+// Array to track all projection polylines for proper cleanup
+var array<polyline> projection_polylines = array.new<polyline>()
+
+if barstate.islast and show_projections and (time >= high_low_bar_time)
+    // Delete ALL previous projection polylines
+    if array.size(projection_polylines) > 0
+        for i = 0 to array.size(projection_polylines) - 1
+            polyline.delete(array.get(projection_polylines, i))
+        array.clear(projection_polylines)
+
+    // Calculate bar gap in milliseconds
+    bar_gap = timeframe.in_seconds(timeframe.period) * 1000
+
+    // Initialize point arrays for declinations
+    array<chart.point> pts_sun_dec = array.new<chart.point>()
+    array<chart.point> pts_moon_dec = array.new<chart.point>()
+    array<chart.point> pts_merc_dec = array.new<chart.point>()
+    array<chart.point> pts_venus_dec = array.new<chart.point>()
+    array<chart.point> pts_mars_dec = array.new<chart.point>()
+    array<chart.point> pts_jup_dec = array.new<chart.point>()
+    array<chart.point> pts_sat_dec = array.new<chart.point>()
+    array<chart.point> pts_ura_dec = array.new<chart.point>()
+    array<chart.point> pts_nep_dec = array.new<chart.point>()
+    array<chart.point> pts_pluto_dec = array.new<chart.point>()
+
+    // Initialize point arrays for geocentric longitudes
+    array<chart.point> pts_sun_geo = array.new<chart.point>()
+    array<chart.point> pts_merc_geo = array.new<chart.point>()
+    array<chart.point> pts_venus_geo = array.new<chart.point>()
+    array<chart.point> pts_mars_geo = array.new<chart.point>()
+    array<chart.point> pts_jup_geo = array.new<chart.point>()
+    array<chart.point> pts_sat_geo = array.new<chart.point>()
+    array<chart.point> pts_ura_geo = array.new<chart.point>()
+    array<chart.point> pts_nep_geo = array.new<chart.point>()
+    array<chart.point> pts_pluto_geo = array.new<chart.point>()
+
+    // Initialize point arrays for heliocentric longitudes
+    array<chart.point> pts_sun_helio = array.new<chart.point>()
+    array<chart.point> pts_merc_helio = array.new<chart.point>()
+    array<chart.point> pts_venus_helio = array.new<chart.point>()
+    array<chart.point> pts_mars_helio = array.new<chart.point>()
+    array<chart.point> pts_jup_helio = array.new<chart.point>()
+    array<chart.point> pts_sat_helio = array.new<chart.point>()
+    array<chart.point> pts_ura_helio = array.new<chart.point>()
+    array<chart.point> pts_nep_helio = array.new<chart.point>()
+    array<chart.point> pts_pluto_helio = array.new<chart.point>()
+
+    // Add declination points: start with zero baseline, then current value
+    if show_proj_declinations
+        if showSunDec
+            array.push(pts_sun_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_sun_dec, chart.point.from_time(time, sun_dec))
+        if showMoonDec
+            array.push(pts_moon_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_moon_dec, chart.point.from_time(time, moon_dec))
+        if showMercuryDec
+            array.push(pts_merc_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_merc_dec, chart.point.from_time(time, merc_dec))
+        if showVenusDec
+            array.push(pts_venus_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_venus_dec, chart.point.from_time(time, venus_dec))
+        if showMarsDec
+            array.push(pts_mars_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_mars_dec, chart.point.from_time(time, mars_dec))
+        if showJupiterDec
+            array.push(pts_jup_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_jup_dec, chart.point.from_time(time, jup_dec))
+        if showSaturnDec
+            array.push(pts_sat_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_sat_dec, chart.point.from_time(time, sat_dec))
+        if showUranusDec
+            array.push(pts_ura_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_ura_dec, chart.point.from_time(time, ura_dec))
+        if showNeptuneDec
+            array.push(pts_nep_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_nep_dec, chart.point.from_time(time, nep_dec))
+        if showPlutoDec
+            array.push(pts_pluto_dec, chart.point.from_time(time, 0.0))
+            array.push(pts_pluto_dec, chart.point.from_time(time, pluto_dec))
+
+    if show_proj_longitudes
+        // Geocentric initial points
+        if showSun
+            array.push(pts_sun_geo, chart.point.from_time(time, sun_long + longitudeShift))
+        if showMercury
+            array.push(pts_merc_geo, chart.point.from_time(time, merc_long + longitudeShift))
+        if showVenus
+            array.push(pts_venus_geo, chart.point.from_time(time, venus_long + longitudeShift))
+        if showMars
+            array.push(pts_mars_geo, chart.point.from_time(time, geo_mars_long + longitudeShift))
+        if showJupiter
+            array.push(pts_jup_geo, chart.point.from_time(time, jup_long + longitudeShift))
+        if showSaturn
+            array.push(pts_sat_geo, chart.point.from_time(time, sat_long + longitudeShift))
+        if showUranus
+            array.push(pts_ura_geo, chart.point.from_time(time, ura_long + longitudeShift))
+        if showNeptune
+            array.push(pts_nep_geo, chart.point.from_time(time, nep_long + longitudeShift))
+        if showPluto
+            array.push(pts_pluto_geo, chart.point.from_time(time, pluto_long + longitudeShift))
+        // Heliocentric initial points
+        if showSunHelio
+            array.push(pts_sun_helio, chart.point.from_time(time, helio_sun_long + longitudeShift))
+        if showMercuryHelio
+            array.push(pts_merc_helio, chart.point.from_time(time, helio_merc_long + longitudeShift))
+        if showVenusHelio
+            array.push(pts_venus_helio, chart.point.from_time(time, helio_venus_long + longitudeShift))
+        if showMarsHelio
+            array.push(pts_mars_helio, chart.point.from_time(time, helio_mars_long + longitudeShift))
+        if showJupiterHelio
+            array.push(pts_jup_helio, chart.point.from_time(time, helio_jup_long + longitudeShift))
+        if showSaturnHelio
+            array.push(pts_sat_helio, chart.point.from_time(time, helio_sat_long + longitudeShift))
+        if showUranusHelio
+            array.push(pts_ura_helio, chart.point.from_time(time, helio_ura_long + longitudeShift))
+        if showNeptuneHelio
+            array.push(pts_nep_helio, chart.point.from_time(time, helio_nep_long + longitudeShift))
+        if showPlutoHelio
+            array.push(pts_pluto_helio, chart.point.from_time(time, helio_pluto_long + longitudeShift))
+
+    // Project into future
+    for i = 1 to look_ahead
+        future_time = time + (bar_gap * i)
+
+        // Calculate future declinations
+        if show_proj_declinations
+            if showSunDec
+                float future_sun_dec = eph.get_declination(eph.Planet.Sun, future_time)
+                array.push(pts_sun_dec, chart.point.from_time(future_time, future_sun_dec))
+            if showMoonDec
+                float future_moon_dec = eph.get_declination(eph.Planet.Moon, future_time)
+                array.push(pts_moon_dec, chart.point.from_time(future_time, future_moon_dec))
+            if showMercuryDec
+                float future_merc_dec = eph.get_declination(eph.Planet.Mercury, future_time)
+                array.push(pts_merc_dec, chart.point.from_time(future_time, future_merc_dec))
+            if showVenusDec
+                float future_venus_dec = eph.get_declination(eph.Planet.Venus, future_time)
+                array.push(pts_venus_dec, chart.point.from_time(future_time, future_venus_dec))
+            if showMarsDec
+                float future_mars_dec = eph.get_declination(eph.Planet.Mars, future_time)
+                array.push(pts_mars_dec, chart.point.from_time(future_time, future_mars_dec))
+            if showJupiterDec
+                float future_jup_dec = eph.get_declination(eph.Planet.Jupiter, future_time)
+                array.push(pts_jup_dec, chart.point.from_time(future_time, future_jup_dec))
+            if showSaturnDec
+                float future_sat_dec = eph.get_declination(eph.Planet.Saturn, future_time)
+                array.push(pts_sat_dec, chart.point.from_time(future_time, future_sat_dec))
+            if showUranusDec
+                float future_ura_dec = eph.get_declination(eph.Planet.Uranus, future_time)
+                array.push(pts_ura_dec, chart.point.from_time(future_time, future_ura_dec))
+            if showNeptuneDec
+                float future_nep_dec = eph.get_declination(eph.Planet.Neptune, future_time)
+                array.push(pts_nep_dec, chart.point.from_time(future_time, future_nep_dec))
+            if showPlutoDec
+                float future_pluto_dec = eph.get_declination(eph.Planet.Pluto, future_time)
+                array.push(pts_pluto_dec, chart.point.from_time(future_time, future_pluto_dec))
+
+        // Calculate future geocentric longitudes
+        if show_proj_longitudes
+            if showSun
+                float future_sun = foldTo180(eph.get_longitude(eph.Planet.Sun, future_time, true)) * mirror_out
+                array.push(pts_sun_geo, chart.point.from_time(future_time, future_sun + longitudeShift))
+            if showMercury
+                float future_merc = foldTo180(eph.get_longitude(eph.Planet.Mercury, future_time, true)) * mirror_out
+                array.push(pts_merc_geo, chart.point.from_time(future_time, future_merc + longitudeShift))
+            if showVenus
+                float future_venus = foldTo180(eph.get_longitude(eph.Planet.Venus, future_time, true)) * mirror_out
+                array.push(pts_venus_geo, chart.point.from_time(future_time, future_venus + longitudeShift))
+            if showMars
+                float future_mars = foldTo180(eph.get_longitude(eph.Planet.Mars, future_time, true)) * mirror_out
+                array.push(pts_mars_geo, chart.point.from_time(future_time, future_mars + longitudeShift))
+            if showJupiter
+                float future_jup = foldTo180(eph.get_longitude(eph.Planet.Jupiter, future_time, true)) * mirror_out
+                array.push(pts_jup_geo, chart.point.from_time(future_time, future_jup + longitudeShift))
+            if showSaturn
+                float future_sat = foldTo180(eph.get_longitude(eph.Planet.Saturn, future_time, true)) * mirror_out
+                array.push(pts_sat_geo, chart.point.from_time(future_time, future_sat + longitudeShift))
+            if showUranus
+                float future_ura = foldTo180(eph.get_longitude(eph.Planet.Uranus, future_time, true)) * mirror_out
+                array.push(pts_ura_geo, chart.point.from_time(future_time, future_ura + longitudeShift))
+            if showNeptune
+                float future_nep = foldTo180(eph.get_longitude(eph.Planet.Neptune, future_time, true)) * mirror_out
+                array.push(pts_nep_geo, chart.point.from_time(future_time, future_nep + longitudeShift))
+            if showPluto
+                float future_pluto = foldTo180(eph.get_longitude(eph.Planet.Pluto, future_time, true)) * mirror_out
+                array.push(pts_pluto_geo, chart.point.from_time(future_time, future_pluto + longitudeShift))
+            // Calculate future heliocentric longitudes (preferGeo=false)
+            if showSunHelio
+                float future_sun_helio = foldTo180(eph.get_longitude(eph.Planet.Sun, future_time, false)) * mirror_out
+                array.push(pts_sun_helio, chart.point.from_time(future_time, future_sun_helio + longitudeShift))
+            if showMercuryHelio
+                float future_merc_helio = foldTo180(eph.get_longitude(eph.Planet.Mercury, future_time, false)) * mirror_out
+                array.push(pts_merc_helio, chart.point.from_time(future_time, future_merc_helio + longitudeShift))
+            if showVenusHelio
+                float future_venus_helio = foldTo180(eph.get_longitude(eph.Planet.Venus, future_time, false)) * mirror_out
+                array.push(pts_venus_helio, chart.point.from_time(future_time, future_venus_helio + longitudeShift))
+            if showMarsHelio
+                float future_mars_helio = foldTo180(eph.get_longitude(eph.Planet.Mars, future_time, false)) * mirror_out
+                array.push(pts_mars_helio, chart.point.from_time(future_time, future_mars_helio + longitudeShift))
+            if showJupiterHelio
+                float future_jup_helio = foldTo180(eph.get_longitude(eph.Planet.Jupiter, future_time, false)) * mirror_out
+                array.push(pts_jup_helio, chart.point.from_time(future_time, future_jup_helio + longitudeShift))
+            if showSaturnHelio
+                float future_sat_helio = foldTo180(eph.get_longitude(eph.Planet.Saturn, future_time, false)) * mirror_out
+                array.push(pts_sat_helio, chart.point.from_time(future_time, future_sat_helio + longitudeShift))
+            if showUranusHelio
+                float future_ura_helio = foldTo180(eph.get_longitude(eph.Planet.Uranus, future_time, false)) * mirror_out
+                array.push(pts_ura_helio, chart.point.from_time(future_time, future_ura_helio + longitudeShift))
+            if showNeptuneHelio
+                float future_nep_helio = foldTo180(eph.get_longitude(eph.Planet.Neptune, future_time, false)) * mirror_out
+                array.push(pts_nep_helio, chart.point.from_time(future_time, future_nep_helio + longitudeShift))
+            if showPlutoHelio
+                float future_pluto_helio = foldTo180(eph.get_longitude(eph.Planet.Pluto, future_time, false)) * mirror_out
+                array.push(pts_pluto_helio, chart.point.from_time(future_time, future_pluto_helio + longitudeShift))
+
+    // Add ending zero points to close the declination polygons
+    int last_future_time = time + (bar_gap * look_ahead)
+    if show_proj_declinations
+        if showSunDec
+            array.push(pts_sun_dec, chart.point.from_time(last_future_time, 0.0))
+        if showMoonDec
+            array.push(pts_moon_dec, chart.point.from_time(last_future_time, 0.0))
+        if showMercuryDec
+            array.push(pts_merc_dec, chart.point.from_time(last_future_time, 0.0))
+        if showVenusDec
+            array.push(pts_venus_dec, chart.point.from_time(last_future_time, 0.0))
+        if showMarsDec
+            array.push(pts_mars_dec, chart.point.from_time(last_future_time, 0.0))
+        if showJupiterDec
+            array.push(pts_jup_dec, chart.point.from_time(last_future_time, 0.0))
+        if showSaturnDec
+            array.push(pts_sat_dec, chart.point.from_time(last_future_time, 0.0))
+        if showUranusDec
+            array.push(pts_ura_dec, chart.point.from_time(last_future_time, 0.0))
+        if showNeptuneDec
+            array.push(pts_nep_dec, chart.point.from_time(last_future_time, 0.0))
+        if showPlutoDec
+            array.push(pts_pluto_dec, chart.point.from_time(last_future_time, 0.0))
+
+    // Create polylines for declinations with area fill
+    if show_proj_declinations
+        if showSunDec and array.size(pts_sun_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_sun_dec, xloc=xloc.bar_time, line_color=sunColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(sunColor, 70), closed=true))
+        if showMoonDec and array.size(pts_moon_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_moon_dec, xloc=xloc.bar_time, line_color=moonColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(moonColor, 70), closed=true))
+        if showMercuryDec and array.size(pts_merc_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_merc_dec, xloc=xloc.bar_time, line_color=mercColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(mercColor, 70), closed=true))
+        if showVenusDec and array.size(pts_venus_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_venus_dec, xloc=xloc.bar_time, line_color=venusColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(venusColor, 70), closed=true))
+        if showMarsDec and array.size(pts_mars_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_mars_dec, xloc=xloc.bar_time, line_color=marsColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(marsColor, 70), closed=true))
+        if showJupiterDec and array.size(pts_jup_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_jup_dec, xloc=xloc.bar_time, line_color=jupColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(jupColor, 70), closed=true))
+        if showSaturnDec and array.size(pts_sat_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_sat_dec, xloc=xloc.bar_time, line_color=satColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(satColor, 70), closed=true))
+        if showUranusDec and array.size(pts_ura_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_ura_dec, xloc=xloc.bar_time, line_color=uraColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(uraColor, 70), closed=true))
+        if showNeptuneDec and array.size(pts_nep_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_nep_dec, xloc=xloc.bar_time, line_color=nepColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(nepColor, 70), closed=true))
+        if showPlutoDec and array.size(pts_pluto_dec) > 1
+            array.push(projection_polylines, polyline.new(pts_pluto_dec, xloc=xloc.bar_time, line_color=plutoColor, line_style=line.style_solid, line_width=projection_linewidth, fill_color=color.new(plutoColor, 70), closed=true))
+
+    // Create polylines for geocentric longitudes
+    if show_proj_longitudes
+        if showSun and array.size(pts_sun_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_sun_geo, xloc=xloc.bar_time, line_color=sunColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showMercury and array.size(pts_merc_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_merc_geo, xloc=xloc.bar_time, line_color=mercColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showVenus and array.size(pts_venus_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_venus_geo, xloc=xloc.bar_time, line_color=venusColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showMars and array.size(pts_mars_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_mars_geo, xloc=xloc.bar_time, line_color=marsColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showJupiter and array.size(pts_jup_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_jup_geo, xloc=xloc.bar_time, line_color=jupColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showSaturn and array.size(pts_sat_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_sat_geo, xloc=xloc.bar_time, line_color=satColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showUranus and array.size(pts_ura_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_ura_geo, xloc=xloc.bar_time, line_color=uraColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showNeptune and array.size(pts_nep_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_nep_geo, xloc=xloc.bar_time, line_color=nepColor, line_style=line.style_solid, line_width=projection_linewidth))
+        if showPluto and array.size(pts_pluto_geo) > 1
+            array.push(projection_polylines, polyline.new(pts_pluto_geo, xloc=xloc.bar_time, line_color=plutoColor, line_style=line.style_solid, line_width=projection_linewidth))
+        // Create polylines for heliocentric longitudes (40% transparency to match historical plots)
+        if showSunHelio and array.size(pts_sun_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_sun_helio, xloc=xloc.bar_time, line_color=color.new(sunColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showMercuryHelio and array.size(pts_merc_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_merc_helio, xloc=xloc.bar_time, line_color=color.new(mercColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showVenusHelio and array.size(pts_venus_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_venus_helio, xloc=xloc.bar_time, line_color=color.new(venusColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showMarsHelio and array.size(pts_mars_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_mars_helio, xloc=xloc.bar_time, line_color=color.new(marsColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showJupiterHelio and array.size(pts_jup_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_jup_helio, xloc=xloc.bar_time, line_color=color.new(jupColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showSaturnHelio and array.size(pts_sat_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_sat_helio, xloc=xloc.bar_time, line_color=color.new(satColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showUranusHelio and array.size(pts_ura_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_ura_helio, xloc=xloc.bar_time, line_color=color.new(uraColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showNeptuneHelio and array.size(pts_nep_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_nep_helio, xloc=xloc.bar_time, line_color=color.new(nepColor, 40), line_style=line.style_solid, line_width=projection_linewidth))
+        if showPlutoHelio and array.size(pts_pluto_helio) > 1
+            array.push(projection_polylines, polyline.new(pts_pluto_helio, xloc=xloc.bar_time, line_color=color.new(plutoColor, 40), line_style=line.style_solid, line_width=projection_linewidth))

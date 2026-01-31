@@ -1,0 +1,567 @@
+//@version=6
+// SPDX-License-Identifier: CC-BY-NC-SA-4.0
+//
+// This source code contains original work by [Javonnii] licensed under
+// the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0).
+// Full license text: https://creativecommons.org/licenses/by-nc-sa/4.0/
+//
+// Licensing Breakdown:
+// - This script is licensed under CC BY-NC-SA 4.0, meaning it may not be used for commercial purposes.
+// - Any modifications, improvements, or forks of this script must include clear attribution to the original author ([Javonnii]).
+// - If redistributed, a link to the original source must be provided.
+//
+// Redistribution & Usage:
+// - You may copy, modify, and share this script under the same CC BY-NC-SA 4.0 terms.
+// - Commercial use is prohibited under this license.
+//
+// Author: © Javonnii
+
+
+indicator("Double Numbered Triangle Chart Progression | Regression", overlay=true, max_labels_count = 500, max_bars_back = 500)
+
+
+group_label = "Setup Intial Settings"
+group_label2 = "Triangle Chart Settings"
+group3 = "Plot Triangle Support and Resistance Levels"
+tooltip1 = "Select High if your timestamp is set at a high pivot. Select Low is your timestamp is set at a low. This High or Low of the candle will start the So9."
+tooltip2 = "It's easier to grab the vertical line and select the timestamp of a significant high or low pivot on any timeframe."
+tooltip3 = "If you've selected a High Pivot make sure to place this 1 or more. If you've select a Low pivot make sure to place this -1 or less."
+tooltip4 = "Definition: The Pivot Points High Low indicator is used to determine and anticipate potential changes in market price and reversals. The Highs referred to in the title are created based on the number of bars that exhibit lower highs on either side of a Pivot Point High, whereas the Lows are created based on the number of bars that exhibit higher lows on either side of a Pivot Point Low. Calculations: As mentioned above, Pivot Point Highs are calculated by the number of bars with lower highs on either side of a Pivot Point High calculation. Similarly, Pivot Point Lows are calculated by the number of bars with higher lows on either side of a Pivot Point Low calculation."
+tooltip5 = "Pivot Point Highs: Determined by counting bars with lower highs on both sides of a high point. Pivot Point Lows: Determined by counting bars with higher lows on both sides of a low point."
+tooltip6 = "For low price stocks, start with 0.01, -0.05, or 0.10. For medium price stocks, start with 0.10, -0.25, 0.50. For high price stocks, start with 0.25, 0.50, or -1.00. For Stock indexes, start with 1, 5, 10, or -25."
+
+tooltip7 = "For prices under a dollar set the rounding precision to 2 or 4 to set the Triangle Chart properly"
+
+
+// Parameters
+dateTime = input.time(0, "Date and Time", group = group_label, tooltip = tooltip2, inline = "1", confirm = true)
+selectHL = input.string("Low", "Select High/Low", options=["High", "Low"], group = group_label, tooltip = tooltip1, inline = "2")
+rounding = input.int(0, "Increase or Reduce Price rounding", group = group_label, inline = "3", tooltip = tooltip7, minval = 0)
+increase = input.float(1.0, "Price per Cell", group = group_label, inline = "4", tooltip = tooltip6)
+show_time = input.bool(true, "Show or Hide the Time varible on the chart.", group = group_label, inline = "5")
+hide_start_line = input.bool(true, "Show/Hide startline w/ info label", group = group_label, inline = "6")
+
+
+// Triangle Support and Resistance Group 
+
+// Rotary selection for angles with no default selection
+levels = input.int(13, "Triangle Layers", group = group3, minval = 0)  // Number of levels (rows)
+angleSelection = input.string("None", "Select Angle", options = ["None", "Left Edge", "Center", "Right Edge"], group = group3)
+ShowLeftEdge = angleSelection == "Left Edge"
+ShowCenter = angleSelection == "Center"
+ShowRightEdge = angleSelection == "Right Edge"
+col1 = input.color(color.aqua, "S&R Angle Color", group = group3)
+col2 = input.color( #000000, "Cell Text Color for the Plotted Edges or Center", group = group3)
+angle_col = input.color(#004b8d, "Highlight Important Angles", group = group3)
+
+
+
+// Pivots Settings
+lengthGroupTitle = "Pivots Settings"
+leftLenH = input.int(title="Pivot High", defval=10, minval=1, inline="Pivot High", group=lengthGroupTitle, tooltip = tooltip5)
+rightLenH = input.int(title="/", defval=10, minval=1, inline="Pivot High", group=lengthGroupTitle, tooltip = tooltip5)
+leftLenL = input.int(title="Pivot Low", defval=10, minval=1, inline="Pivot Low", group=lengthGroupTitle)
+rightLenL = input.int(title="/", defval=10, minval=1, inline="Pivot Low", group=lengthGroupTitle)
+labelColorH = input(title="Pivot High Label Color", defval=color.lime, group=lengthGroupTitle)
+labelColorL = input(title="Pivot Low Label Color", defval=color.red, group=lengthGroupTitle)
+labelColorS = input(title="Equal Pivots", defval=color.orange, group=lengthGroupTitle)
+textColorL = input(title="Text Color for all Pivot Labels", defval=#000000, group=lengthGroupTitle)
+hide_pivot_labels = input.bool(false, " Show/Hide pivot labels", group = lengthGroupTitle)
+
+
+
+// Triangle Chart Settings 
+var string tablePosition = input.string("Top Right", "Triangle Chart Position", ["Top Right", "Middle Right", "Bottom Right", "Top Left", "Middle Left", "Bottom Left"], group= group_label2)
+var string tableTextSize = input.string(size.small, "Cell Font Size", inline="fontcolor", options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge], group = group_label2)
+var color tableTextColor = input.color(color.new(color.white, 0), "Cell Text Color", group = group_label2)
+var float width = input.float(0, "Cell Width", group= group_label2)
+var float height = input.float(0, "Cell Height", group= group_label2)
+var int frameWidth = input.int(0, "Frame Width", group= group_label2)
+var color frameColor = input.color(color.new(color.white, 80), "Cell BGColor", group = group_label2)
+var color realtime_close_bgclr = input.color(color.new(color.white, 0), "Realtime Close Price BG color on Price & Time Chart", group = group_label2)
+
+
+// Persistent variables
+var float _scaledcurrent_price = na
+var float __scaledcurrent_price = na
+var float price_ = na 
+var float price__ = na 
+var int targetBar = na 
+
+
+
+var string position = switch tablePosition
+    "Top Right" => position.top_right
+    "Middle Right" => position.middle_right
+    "Bottom Right" => position.bottom_right
+    "Top Left" => position.top_left
+    "Middle Left" => position.middle_left 
+    => position.bottom_left
+
+
+
+
+
+// Persistent variables
+var bool dateTimeReached = false
+var pivotHighsArray = array.new_float()
+var pivotLowsArray = array.new_float()
+var float anchor_long = na 
+var float travel1 = na 
+var float travel2 = na 
+var float degree1 = na 
+var float degree2 = na 
+var float[] values = array.new_float()
+var int start_bar = na 
+var float piv_price = na 
+
+if (time == dateTime)
+    dateTimeReached := true
+    start_bar := bar_index
+    piv_price := selectHL == "High" ? high : low
+
+
+var bool firstPivotHSkipped = false
+var bool firstPivotLSkipped = false
+
+
+
+if dateTimeReached
+    // Pivot High and Low Calculation
+    ph = ta.pivothigh(leftLenH, rightLenH)
+    pl = ta.pivotlow(leftLenL, rightLenL)
+    var label ph_labs = na
+    var label pl_labs = na 
+
+
+    // For Pivots High
+    if not na(ph)
+        if selectHL == "High"
+            // Skip the first high pivot, push the rest
+            if firstPivotHSkipped
+                array.push(pivotHighsArray, math.round(ph, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+                    
+            else
+                firstPivotHSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+                    
+        else
+            // If user selected "Low", we do not skip any highs
+            array.push(pivotHighsArray, math.round(ph, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[rightLenH], ph, str.tostring(math.round(ph, rounding)), style=label.style_label_down, color=labelColorH, textcolor=textColorL, size=size.small, force_overlay=true)
+                
+        
+
+    // For Pivots Low
+    if not na(pl)
+        if selectHL == "Low"
+            // Skip the first low pivot, push the rest
+            if firstPivotLSkipped
+                array.push(pivotLowsArray, math.round(pl, rounding))
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+            else
+                firstPivotLSkipped := true
+                if not hide_pivot_labels
+                    label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+        else
+            // If user selected "High", we do not skip any lows
+            array.push(pivotLowsArray, math.round(pl, rounding))
+            if not hide_pivot_labels
+                label.new(bar_index[rightLenL], pl, str.tostring(math.round(pl, rounding)), style=label.style_label_up, color=labelColorL, textcolor=textColorL, size=size.small, force_overlay=true)
+
+
+
+
+
+
+
+type tableCells 
+    int column
+    int row
+
+
+// Calculate table dimensions
+tableRows = levels
+tableCols = levels * 2 - 1  // Adjust to accommodate the widest row
+
+// Create table
+var table tab = table.new(position, tableCols, tableRows, frame_width = frameWidth, border_width = frameWidth)
+var int currentColumn = tableCols / 2
+var int currentRow = tableRows - 1
+var tableCells[] coordinates = array.new<tableCells>()
+
+
+// Function to create a cell with value and background color, modified to include show_time
+f_createCellWithValueAndColor(col, row, value, count, show_time) =>
+    // Determine the text content based on the value of show_time
+    cellText = show_time ? str.tostring(value) + "\n" + str.tostring(count) : str.tostring(value)
+    
+    // Create the table cell
+    table.cell(tab, col, row, cellText, bgcolor=frameColor, text_color=tableTextColor, text_size=tableTextSize, width = width, height = height)
+    
+    // Add the cell's coordinates and value to the respective arrays
+    pivot = tableCells.new(col, row)
+    array.push(coordinates, pivot)
+    array.push(values, value)
+
+
+// Function to set the background color of the left, right edges and center line of the triangle
+setEdgesAndCenterBackground(table tab, int levels, color bgcolor) =>
+    int tableColss = levels * 2 - 1
+    for row = 0 to levels - 1
+        int cellsInRow = row + 1
+        int startCol = tableColss / 2 - row
+        for colOffset = 0 to cellsInRow - 1
+            int col = startCol + colOffset * 2
+            if colOffset == 0 or colOffset == cellsInRow - 1 or col == tableColss / 2
+                table.cell_set_bgcolor(tab, col, levels - 1 - row, bgcolor)
+                
+
+// Function to calculate the left edge sequence
+calculateLeftEdge(float startPrice, float increment, int levels) =>
+    var float[] leftEdge = array.new_float()
+    float currentValue = math.round(startPrice, rounding) + increase
+
+    for level = 1 to levels
+        // Add the current value to the left edge array
+        array.push(leftEdge, currentValue)
+        // Increment the current value by the increment multiplied by the level
+        currentValue := currentValue + (increment * level)
+
+    leftEdge
+
+
+// Function to calculate the left edge sequence
+calculateRight(float startPrice, float increment, int levels) =>
+    var float[] RightEdge = array.new_float()
+    float currentValue = math.round(startPrice, rounding) + increase
+
+    for level = 1 to levels
+        // Add the current value to the left edge array
+        array.push(RightEdge, currentValue)
+        // Increment the current value by the increment multiplied by the level
+        currentValue := currentValue + (increment * (level + 1))
+
+    RightEdge
+
+
+calculateCenter(float startPrice, float increment, int levels) =>
+    var float[] Center = array.new_float()
+    float currentValue = math.round(startPrice, rounding) + increase
+
+    for level = 1 to levels
+        // Add the current value to the left edge array
+        array.push(Center, currentValue)
+        // Increment the current value by the increment multiplied by the level
+        currentValue := currentValue + (increment * (level + .5))
+
+    Center
+
+
+f_quadratic_term(index) =>
+    int((index * (index + 1)) / 2 + 1)
+
+
+f_triangular_term(index) =>
+    int(((index + 1) * (index + 2)) / 2)
+
+
+f_quadratic_term_center(index) =>
+    int(2 * index * index + 2 * index + 1)
+
+
+f_quadratic_term_center_l(index) =>
+    int(2 * index * index + 4 * index + 2)
+
+
+var tri_levels = array.new_float()
+
+// Check and update scaled current price at specific datetime
+if (time == dateTime)
+    price_ := selectHL == "High" ? high : low 
+    
+    int count = 1
+
+    float startingValue = math.round(price_, rounding) + increase
+
+    if selectHL == "Low"
+        for row = 0 to levels - 1
+            int cellsInRow = row + 1  // Number of cells in the current row
+            int startCol = currentColumn - row  // Calculate starting column to center the triangle
+            for colOffset = 0 to cellsInRow - 1
+                int col = startCol + colOffset * 2  // Step by 2 to reduce the width and center the rows
+                f_createCellWithValueAndColor(col, currentRow, startingValue, count, show_time)
+                startingValue += increase  // Increment the value for the next cell
+                count += 1  // Increment cell count
+            currentRow -= 1  // Move to the next row up
+
+
+    if selectHL == "High"
+        for row = 0 to levels - 1
+            int cellsInRow = row + 1  // Number of cells in the current row
+            int startCol = currentColumn - row  // Calculate starting column to center the triangle
+            for colOffset = 0 to cellsInRow - 1
+                int col = startCol + colOffset * 2  // Step by 2 to reduce the width and center the rows
+                f_createCellWithValueAndColor(col, currentRow, startingValue, count, show_time)
+                startingValue += increase  // Increment the value for the next cell
+                count += 1  // Increment cell count
+            currentRow -= 1  // Move to the next row up
+
+
+    setEdgesAndCenterBackground(tab, levels, angle_col)
+
+
+// plot(leftEdge.size())
+
+
+var label left_time_labs = na 
+var int bar_ = na 
+
+var line[] left_lines = array.new<line>()  
+var label[] left_labels = array.new<label>()  
+var line[] right_lines = array.new<line>()  
+var label[] right_labels = array.new<label>()
+var line[] center_lines = array.new<line>()  
+var label[] center_labels = array.new<label>()
+
+
+
+var line[] lines_array = array.new<line>()
+var label[] label_array = array.new<label>()
+var line l5 = na 
+var label lab9 = na 
+
+
+
+if (time == dateTime)
+
+
+    if ShowLeftEdge
+        leftEdge = calculateLeftEdge(price_, increase, levels)
+
+        for i = 0 to array.size(leftEdge) - 1
+
+            // Table cell coloring logic
+            pivot_high_cell = array.indexof(values, array.get(leftEdge, i))
+            if pivot_high_cell >= 0
+                coord = array.get(coordinates, pivot_high_cell)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, col1)
+                table.cell_set_text_color(tab, coord.column, coord.row, col2)
+        
+
+    else if ShowCenter
+        Center = calculateCenter(price_, increase, levels)
+        var float line_val = na 
+        var string time_val_ = na     
+        var int counter = 0
+
+        for i = 0 to array.size(Center) - 1 
+
+
+            pivot_high_cell = array.indexof(values, array.get(Center, i))
+            if pivot_high_cell >= 0
+                coord = array.get(coordinates, pivot_high_cell)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, col1)
+                table.cell_set_text_color(tab, coord.column, coord.row, col2)
+         
+
+    else if ShowRightEdge
+        RightEdge = calculateRight(price_, increase, levels)
+
+        for i = 0 to array.size(RightEdge) - 1
+
+            pivot_high_cell = array.indexof(values, array.get(RightEdge, i))
+            if pivot_high_cell >= 0
+                coord = array.get(coordinates, pivot_high_cell)
+                table.cell_set_bgcolor(tab, coord.column, coord.row, col1)
+                table.cell_set_text_color(tab, coord.column, coord.row, col2)
+
+
+
+
+if barstate.islast
+
+    // Delete prior bar's lines and labels
+    for l in left_lines
+        line.delete(l)
+    array.clear(left_lines)
+
+    for lbl in left_labels
+        label.delete(lbl)
+    array.clear(left_labels)
+
+    for r in right_lines
+        line.delete(r)
+    array.clear(right_lines)
+
+    for lbl_ in right_labels
+        label.delete(lbl_)
+    array.clear(right_labels)
+
+    for c in center_lines
+        line.delete(c)
+    array.clear(center_lines)
+
+    for lbl__ in center_labels
+        label.delete(lbl__)
+    array.clear(center_labels)
+
+    if ShowLeftEdge
+        leftEdge = calculateLeftEdge(price_, increase, levels)
+
+        for i = 0 to array.size(leftEdge) - 1
+            str_val = str.tostring(array.get(leftEdge, i))
+            time_val = str.tostring(f_quadratic_term(i))
+
+            // Create new line and store reference
+            l = line.new(start_bar, array.get(leftEdge, i), last_bar_index + 30, array.get(leftEdge, i), color = col1)
+            array.push(left_lines, l)
+
+            // Create new labels and store references
+            lbl1 = label.new(x = last_bar_index + 30, y = array.get(leftEdge, i), text = str_val, yloc=yloc.price, textalign=text.align_right, size=size.small, textcolor=col2, color=col1)
+            lbl2 = label.new(x = start_bar, y = array.get(leftEdge, i), text = time_val, yloc=yloc.price, textalign=text.align_right, size=size.tiny, textcolor=col2, color=col1)
+
+            array.push(left_labels, lbl1)
+            array.push(left_labels, lbl2)
+
+        // Clear time values
+        array.clear(leftEdge)
+
+    else if ShowCenter
+        Center = calculateCenter(price_, increase, levels)
+        var float line_val = na 
+        var string time_val_ = na     
+        var int counter = 0
+
+        for i = 0 to array.size(Center) - 1 
+
+            if i % 2 == 0 // remove to get price inbetween center cells. time would be half of the left and right of center cell. need to skip every other to sync with table and time. 
+                val = array.get(Center, i)
+                time_val_ := str.tostring(f_quadratic_term_center(counter))
+                line_val := val
+                c = line.new(start_bar, array.get(Center, i), last_bar_index + 30, array.get(Center, i), color = col1)
+                array.push(center_lines, c)
+
+                lbl3 = label.new(x = last_bar_index + 30, y = array.get(Center, i), text = str.tostring(val), yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = col2, color = col1)
+                lbl4 = label.new(x = start_bar, y = array.get(Center, i), text = time_val_, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = col2, color = col1)
+
+                array.push(center_labels, lbl3)
+                array.push(center_labels, lbl4)    
+
+                counter += 1
+
+        // reset counter 
+        counter := 0
+
+        // Clear time values
+        array.clear(Center)            
+
+    else if ShowRightEdge
+        RightEdge = calculateRight(price_, increase, levels)
+
+        for i = 0 to array.size(RightEdge) - 1
+            str_val = str.tostring(array.get(RightEdge, i))
+            time_val = str.tostring(f_triangular_term(i))
+            r = line.new(start_bar, array.get(RightEdge, i), last_bar_index + 30, array.get(RightEdge, i), color = col1)
+            array.push(right_lines, r)
+
+            lbl5 = label.new(x = last_bar_index + 30, y = array.get(RightEdge, i), text = str_val, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = col2, color = col1)
+            lbl6 = label.new(x = start_bar, y = array.get(RightEdge, i), text = time_val, yloc=yloc.price, textalign= text.align_right, size=size.tiny, textcolor = col2, color = col1)
+            array.push(right_labels, lbl5)
+            array.push(right_labels, lbl6)
+
+        // Clear time values
+        array.clear(RightEdge)
+    
+
+    if selectHL == "High" and increase < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+
+    // Process High Pivots
+    if array.size(pivotHighsArray) > 0
+        for i = 0 to array.size(pivotHighsArray) - 1
+            pivotHigh = array.get(pivotHighsArray, i)
+            scaled_piv = pivotHigh
+            
+            pivot_high_cell = array.binary_search_rightmost(values, scaled_piv)
+
+            // Ensure pivot_high_cell is a valid index before accessing 'coordinates'
+            if pivot_high_cell >= 1 and pivot_high_cell < array.size(coordinates)
+                coord = array.get(coordinates, pivot_high_cell)
+                
+                // Check if the pivot high is in the low array
+                if array.includes(pivotLowsArray, pivotHigh)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorH)
+                
+                table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+    // Process Low Pivots
+    if array.size(pivotLowsArray) > 0
+        for i = 0 to array.size(pivotLowsArray) - 1
+            pivotLow = array.get(pivotLowsArray, i)
+            scaled_piv_2 = pivotLow
+            pivot_low_cell = array.binary_search_rightmost(values, scaled_piv_2)
+
+            if pivot_low_cell >= 1 and pivot_low_cell < array.size(coordinates) 
+                coord = array.get(coordinates, pivot_low_cell)
+                
+                // Check if the pivot low is also in the pivot high array
+                if array.includes(pivotHighsArray, pivotLow)
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorS)
+                else
+                    table.cell_set_bgcolor(tab, coord.column, coord.row, labelColorL)
+                
+                table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+    if hide_start_line
+        l5 := line.new(start_bar, piv_price, last_bar_index + 90, piv_price, color = tableTextColor,  force_overlay = true)
+        line.delete(l5[1])
+        lab9 := label.new(x=last_bar_index + 90, y=piv_price , text="Start Price:" + str.tostring(piv_price) + " " + " | Increment:" + str.tostring(increase) + " | Round precision: " + str.tostring(rounding), xloc=xloc.bar_index, yloc=yloc.price, textalign= text.align_right, size=size.small, textcolor = color.black, color = tableTextColor,  force_overlay = true)
+        label.delete(lab9[1])
+
+
+
+var float result = na 
+if barstate.isrealtime or barstate.islast
+
+    price = close
+    if selectHL == "High" and increase < 0 // fixes the bug plotting on table in regression 
+        array.reverse(values)
+        array.reverse(coordinates)
+    
+        // result3 = math.abs(result1, result2)
+    price___ = (math.round(price_, rounding)) + increase
+
+    // I'm subtracting the realtime price which is the close price from the 
+    result := (close + increase) - price___
+
+    idx = (math.abs(int(result / increase)))
+
+    // I'm adding 1 because the chart starts with 1 against the price. This add 1 to the time portion * the increment and then added to the first cell price of the chart. 
+    sum =  (idx * increase) + price___
+
+    index = array.indexof(values, sum)
+    if index > 0 and not barstate.isconfirmed
+        coord = array.get(coordinates, index)
+        table.cell_set_bgcolor(tab, coord.column, coord.row, realtime_close_bgclr)
+        table.cell_set_text_color(tab, coord.column, coord.row, textColorL)
+
+
+
+
+
+
+
+
+

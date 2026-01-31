@@ -1,0 +1,1021 @@
+//   ════════════════════════════════════════════════════════════
+//      BLUEPRINT RESEARCH • PRICE AND LONGITUDE ANGLES
+//   ════════════════════════════════════════════════════════════
+//
+//                  ★       ★       ★
+//                      ╱   │   ╲
+//                     ─    ☉    ─
+//                      ╲   │   ╱
+//                  ★       ★       ★
+//
+//   ════════════════════════════════════════════════════════════
+//
+// @description  Maps planetary longitude to price using Gann fan angles.
+//               Supports single-planet or dual-planet modes with Average
+//               and Synodic calculation options. Features future projections
+//               and orbital bar coloring.
+//
+// @author       BlueprintResearch (Javonnii)
+// @license      CC BY-NC-SA 4.0 (original work) + MPL-2.0 (HSV Color Tools)
+// @version      3.0 (January 2026)
+//
+// @theory       Uses VSOP87, ELP2000-82, and Meeus algorithms via
+//               Blueprint Research ephemeris libraries for accurate
+//               planetary longitude calculations.
+//
+// @features     • Gann fan lines (1x8, 1x4, 1x3, 1x2, 1x1, 2x1, 3x1, 4x1, 8x1)
+//               • Average mode: Uses average and select the same for Single planet longitudes or between different planets
+//               • Synodic mode: Uses difference between planet longitudes
+//                 (select innermost planet first for proper calculations)
+//               • Future projections up to 500 bars
+//               • Geocentric and heliocentric modes
+//               • Orbital bar coloring by zodiac sign
+//
+// @accuracy     High accuracy using VSOP87/ELP2000-82 truncated series.
+//               Within 1-10 arcseconds for most planets.
+//
+//
+// @credits      HSV and HSL Color Tools by kaigouthro/Cairo (MPL-2.0)
+//               https://mozilla.org/MPL/2.0/
+//
+// ════════════════════════════════════════════════════════════════
+//   © 2025-2026 BlueprintResearch / Javonnii
+//   Licensed under CC BY-NC-SA 4.0 (Non-Commercial, ShareAlike)
+// ════════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("Price and Longitude Angles", overlay=true, max_lines_count=500, max_bars_back=500, max_polylines_count=100)
+import BlueprintResearch/lib_ephemeris/1 as eph
+import BlueprintResearch/lib_vsop_core/1 as core
+import kaigouthro/waves/1 as wv
+import kaigouthro/hsvColor/17 as color
+
+// ═══════════════════════════════════════════════════════════════════
+// Input Settings
+// ═══════════════════════════════════════════════════════════════════
+
+// 1. Anchor Point
+group_anchor = "1. Anchor Point"
+high_low_bar_time = input.time(0, "Select a Significant High or Low Pivot", confirm = true, group = group_anchor)
+selectHL1 = input.string("Low", "Select High/Low of pivot", options=["High", "Low"], group = group_anchor)
+
+// 2. Planet Selection
+group_planet = "2. Planet Selection"
+planet1_in = input.string("☉︎ Sun", "Primary", options=["☉︎ Sun", "☽︎ Moon", "☿ Mercury", "♀ Venus", "♂ Mars", "♃ Jupiter", "♄ Saturn", "⛢ Uranus", "♆ Neptune", "♇ Pluto"], inline="planets", group = group_planet, tooltip = "Select the primary planet. For Single mode, only this planet is used.")
+planet2_in = input.string("☉︎ Sun", "Secondary", options=["☉︎ Sun", "☽︎ Moon", "☿ Mercury", "♀ Venus", "♂ Mars", "♃ Jupiter", "♄ Saturn", "⛢ Uranus", "♆ Neptune", "♇ Pluto"], inline="planets", group = group_planet, tooltip = "Secondary planet for Average/Synodic modes. Ignored in Single mode.")
+geo = input.bool(true, "Use Geocentric", group = group_planet, tooltip = "Checked: Earth-centered (geocentric). Unchecked: Sun-centered (heliocentric).")
+
+// 3. Settings
+group_settings = "3. Settings"
+line_type = input.string("Single", "Calculation Mode", options = ["Single", "Average", "Synodic"], group = group_settings, tooltip = "Single: Primary planet only. Average: Midpoint of two planets. Synodic: Angular separation between them.")
+scale_ratio1 = input.float(1.0, "Price per 1° Longitude", step=0.5, group = group_settings, tooltip = "How much price moves per degree of planetary longitude change.")
+mirror_in = input.bool(false, "Mirror Fan Direction", group = group_settings, tooltip = "Flip the direction of fan lines.")
+degree_per1 = 1
+
+// 4. Fan Lines
+group_fan = "4. Fan Lines"
+show_1x8 = input.bool(true, title="Show 1x8 Fan Line", group = group_fan)
+show_1x4 = input.bool(true, title="Show 1x4 Fan Line", group = group_fan)
+show_1x3 = input.bool(true, title="Show 1x3 Fan Line", group = group_fan)
+show_1x2 = input.bool(true, title="Show 1x2 Fan Line", group = group_fan)
+show_1x1 = input.bool(true, title="Show 1x1 Fan Line", group = group_fan)
+show_2x1 = input.bool(true, title="Show 2x1 Fan Line", group = group_fan)
+show_3x1 = input.bool(true, title="Show 3x1 Fan Line", group = group_fan)
+show_4x1 = input.bool(true, title="Show 4x1 Fan Line", group = group_fan)
+show_8x1 = input.bool(true, title="Show 8x1 Fan Line", group = group_fan)
+
+// 5. Display Options
+group_display = "5. Display Options"
+show_info_table = input.bool(true, "Show Info Table", group = group_display, tooltip = "Display summary table with price/degree, mode, planets, and traveled degrees")
+label_text_size = input.string(size.small, "Text Size", options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge], group = group_display, tooltip = "Text size for info table, fan line labels, and aspect table")
+cycleUnit = input.float(360.0, minval=1, title="Cycle Unit (degrees)", group = group_display, tooltip = "Number of degrees per cycle (360° = one full rotation)")
+showCycles = input.bool(true, title="Show Cycles in Info Table", group = group_display)
+
+// 6. Future Projections
+group_proj = "6. Future Projections"
+show_projections = input.bool(true, "Enable Future Projections", group = group_proj, tooltip = "Project fan lines into the future using calculated planetary positions")
+look_ahead = input.int(250, "Look Ahead Bars", minval=1, maxval=250, group = group_proj, tooltip = "Number of bars to project fan lines into the future")
+proj_transparency = input.int(0, "Projection Transparency", minval=0, maxval=100, group = group_proj, tooltip = "Transparency of projected lines (0=solid, 100=invisible)")
+show_proj_labels = input.bool(true, "Show Projection End Labels", group = group_proj, tooltip = "Display labels at the end of projected lines")
+
+// 7. Aspect Table
+group_tab = "7. Aspect Table"
+zodiac_tooltip = "The Zodiac Table shows the current planetary longitude mapped to zodiac signs. When 'Orbital Bar Color' is enabled, bars are colored based on which zodiac sign the planetary angle is currently in. Use this table as a reference to understand the bar coloring."
+show_orbital_clr = input.bool(false, title="Enable Orbital Bar Coloring", group = group_tab, tooltip = "Color price bars based on the zodiac sign of the current planetary angle")
+show_clr_tab = input.bool(false, "Show Zodiac Aspect Table", group = group_tab, tooltip = zodiac_tooltip)
+tab_text_clr = input.color(color.white, "Table Text Color", group = group_tab)
+
+
+mirror_out = mirror_in ? -1 : 1
+centricSign = geo ? "𝒢" : "ℋ"
+
+// Timestamp to bar index conversion
+timestamp_to_index(_time) =>
+    var int index = na
+    if na(index) and time >= _time
+        index := bar_index
+    index
+
+high_low_bar_index = timestamp_to_index(high_low_bar_time)
+
+
+
+// === Normalize angle to 0–360° for continuity ===
+normalize360(lon) =>
+    wrapped360 = core.mod360(lon)
+    wrapped360 := wrapped360 < 0 ? wrapped360 + 360 : wrapped360
+    wrapped360
+
+// Function to return hue, saturation, and value individually
+planet_hue(planet) =>
+    switch planet
+        "☉︎ Sun"   => 50   // Golden Yellow
+        "☽︎ Moon"  => 0    // White/Silver
+        "☿ Mercury" => 300 // Purple/Maroon
+        "♀ Venus"  => 120  // Green
+        "♂ Mars"   => 0    // Red
+        "♃ Jupiter" => 30   // Orange
+        "♄ Saturn"  => 45   // Gray/Yellowish
+        "⛢ Uranus"  => 200  // Deep Blue/Navy
+        "♆ Neptune" => 180  // Cyan
+        "♇ Pluto"   => 260  // Dark Violet
+        => na  // Default case
+
+planet_saturation(planet) =>
+    switch planet
+        "☉︎ Sun"   => 1  
+        "☽︎ Moon"  => 0  // Silver (low saturation)
+        "☿ Mercury" => 0.6  
+        "♀ Venus"  => 1   
+        "♂ Mars"   => 1  
+        "♃ Jupiter" => 1  
+        "♄ Saturn"  => 0.3  // Gray (low saturation)
+        "⛢ Uranus"  => 1  
+        "♆ Neptune" => 1  
+        "♇ Pluto"   => 0.6  
+        => na  
+
+planet_value(planet) =>
+    switch planet
+        "☉︎ Sun"   => 1  
+        "☽︎ Moon"  => 0.85  // Bright but not pure white
+        "☿ Mercury" => 0.8  
+        "♀ Venus"  => 1  
+        "♂ Mars"   => 1  
+        "♃ Jupiter" => 1  
+        "♄ Saturn"  => 0.8  
+        "⛢ Uranus"  => 1  
+        "♆ Neptune" => 1  
+        "♇ Pluto"   => 0.6  
+        => na  
+
+// Get HSV values for each planet
+hue1 = planet_hue(planet1_in)
+sat1 = planet_saturation(planet1_in)
+val1 = planet_value(planet1_in)
+
+hue2 = planet_hue(planet2_in)
+sat2 = planet_saturation(planet2_in)
+val2 = planet_value(planet2_in)
+
+// Assign colors only if values are not `na`
+col1_out = not na(hue1) and not na(sat1) and not na(val1) ? color.hsv(hue1, sat1, val1, 1) : na
+// col2_out = not na(hue2) and not na(sat2) and not na(val2) ? color.hsv(hue2, sat2, val2, 1) : na
+
+
+
+// Function to get the price based on selection (High or Low)
+get_price(selection) =>
+    selection == "High" ? high : low
+
+
+// Function to get planet longitude (simplified using lib_ephemeris)
+f_get_planet_longitude(string planet_str, bool use_geo, int timestamp_ms) =>
+    planet_enum = eph.string_to_planet(planet_str)
+    eph.get_longitude(planet_enum, timestamp_ms, use_geo)
+
+// Convert longitude to degree-sign format (e.g., "15°Ari32'")
+f_degsignf(float lon) =>
+    signs = array.from("Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis")
+    norm = lon % 360
+    norm := norm < 0 ? norm + 360 : norm
+    sign_idx = int(norm / 30)
+    deg_in_sign = norm % 30
+    deg = int(deg_in_sign)
+    min = int((deg_in_sign - deg) * 60)
+    str.tostring(deg) + "°" + array.get(signs, sign_idx) + str.tostring(min) + "'"
+
+
+
+// Initialize variables
+var float accumulated_change1 = na
+var float accumulated_change2 = na
+var float previous_long = na
+var float previous_long_2 = na
+var int targetBar1 = na
+var float current_long = na
+var float current_long_2 = na
+var float long_delta = na 
+var float long_delta_2 = na 
+var float accumulated_syn = na
+var float previous_syn = na
+var float current_syn = na
+var float anchor_syn = na
+
+// Label variables
+var label label1x1 = na
+var label label1x2 = na
+var label label2x1 = na
+var label label1x3 = na
+var label label3x1 = na
+var label label1x4 = na
+var label label4x1 = na
+var label label1x8 = na
+var label label8x1 = na
+
+// Info table (top right corner)
+var table infoTable = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 80), border_width=1)
+
+// Fan variables for Planet 1
+var float targetPrice1 = na
+var float targetPrice_1x2 = na
+var float targetPrice_2x1 = na
+var float targetPrice_3x1 = na
+var float targetPrice_4x1 = na
+var float targetPrice_8x1 = na
+var float targetPrice_1x3 = na
+var float targetPrice_1x4 = na
+var float targetPrice_1x8 = na
+
+var float diagonal_value_1x1 = na
+var float diagonal_value_2x1 = na
+var float diagonal_value_3x1 = na
+var float diagonal_value_4x1 = na
+var float diagonal_value_8x1 = na
+var float diagonal_value_1x2 = na
+var float diagonal_value_1x3 = na
+var float diagonal_value_1x4 = na
+var float diagonal_value_1x8 = na
+
+var float degree_counter = na 
+
+// Fan variables for Planet 2 (similar structure for the second planet)
+var float targetPrice2 = na
+var float targetPrice2_1x2 = na
+var float targetPrice2_2x1 = na
+var float targetPrice2_3x1 = na
+var float targetPrice2_4x1 = na
+var float targetPrice2_8x1 = na
+var float targetPrice2_1x3 = na
+var float targetPrice2_1x4 = na
+var float targetPrice2_1x8 = na
+
+var float diagonal_value_2_1x1 = na
+var float diagonal_value_2_2x1 = na
+var float diagonal_value_2_3x1 = na
+var float diagonal_value_2_4x1 = na
+var float diagonal_value_2_8x1 = na
+var float diagonal_value_2_1x2 = na
+var float diagonal_value_2_1x3 = na
+var float diagonal_value_2_1x4 = na
+var float diagonal_value_2_1x8 = na
+var float anchor_long = na
+var float anchor_long_2 = na
+
+// Future projection polylines (one per fan ratio)
+var polyline proj_1x1 = na
+var polyline proj_1x2 = na
+var polyline proj_2x1 = na
+var polyline proj_1x3 = na
+var polyline proj_3x1 = na
+var polyline proj_1x4 = na
+var polyline proj_4x1 = na
+var polyline proj_1x8 = na
+var polyline proj_8x1 = na
+
+// Future projection end labels
+var label proj_label_1x1 = na
+var label proj_label_1x2 = na
+var label proj_label_2x1 = na
+var label proj_label_1x3 = na
+var label proj_label_3x1 = na
+var label proj_label_1x4 = na
+var label proj_label_4x1 = na
+var label proj_label_1x8 = na
+var label proj_label_8x1 = na
+
+if (time == high_low_bar_time)
+    // Store initial values for Planet 1
+    targetBar1 := bar_index
+    targetPrice1 := get_price(selectHL1)
+    targetPrice_1x2 := get_price(selectHL1)
+    targetPrice_2x1 := get_price(selectHL1)
+    targetPrice_3x1 := get_price(selectHL1)
+    targetPrice_4x1 := get_price(selectHL1)
+    targetPrice_8x1 := get_price(selectHL1)
+    targetPrice_1x3 := get_price(selectHL1)
+    targetPrice_1x4 := get_price(selectHL1)
+    targetPrice_1x8 := get_price(selectHL1)
+
+    // Store initial values for Planet 2
+    targetPrice2 := get_price(selectHL1)
+    targetPrice2_1x2 := get_price(selectHL1)
+    targetPrice2_2x1 := get_price(selectHL1)
+    targetPrice2_3x1 := get_price(selectHL1)
+    targetPrice2_4x1 := get_price(selectHL1)
+    targetPrice2_8x1 := get_price(selectHL1)
+    targetPrice2_1x3 := get_price(selectHL1)
+    targetPrice2_1x4 := get_price(selectHL1)
+    targetPrice2_1x8 := get_price(selectHL1)
+
+    // Reset previous longitudes and accumulated changes
+    previous_long := na
+    previous_long_2 := na
+    previous_syn := na
+    accumulated_change1 := 0.0
+    accumulated_change2 := 0.0
+    accumulated_syn := 0.0
+    degree_counter := 0.0
+
+    // Set initial diagonal values for both planets
+    diagonal_value_1x1 := targetPrice1
+    diagonal_value_1x2 := targetPrice_1x2
+    diagonal_value_2x1 := targetPrice_2x1
+    diagonal_value_3x1 := targetPrice_3x1
+    diagonal_value_4x1 := targetPrice_4x1
+    diagonal_value_8x1 := targetPrice_8x1
+    diagonal_value_1x3 := targetPrice_1x3
+    diagonal_value_1x4 := targetPrice_1x4
+    diagonal_value_1x8 := targetPrice_1x8
+
+    diagonal_value_2_1x1 := targetPrice2
+    diagonal_value_2_1x2 := targetPrice2_1x2
+    diagonal_value_2_2x1 := targetPrice2_2x1
+    diagonal_value_2_3x1 := targetPrice2_3x1
+    diagonal_value_2_4x1 := targetPrice2_4x1
+    diagonal_value_2_8x1 := targetPrice2_8x1
+    diagonal_value_2_1x3 := targetPrice2_1x3
+    diagonal_value_2_1x4 := targetPrice2_1x4
+    diagonal_value_2_1x8 := targetPrice2_1x8
+
+    anchor_long := f_get_planet_longitude(planet1_in, geo, time)
+    anchor_long_2 := f_get_planet_longitude(planet2_in, geo, time)
+    anchor_syn := normalize360(anchor_long - anchor_long_2)
+
+
+
+// New variables for degree counting
+var float degree_counter_custom = 0.0
+var float previous_long_custom = na
+var float current_long_custom = na 
+var float long_deltas = na 
+var float average_accum = na 
+
+
+if (time >= high_low_bar_time)
+    // Get the current planetary longitudes for both planets
+    current_long := f_get_planet_longitude(planet1_in, geo, time)
+    current_long_2 := f_get_planet_longitude(planet2_in, geo, time)
+    current_syn := normalize360(current_long - current_long_2)
+
+    if line_type == "Single"
+        // Single mode: Only use Planet 1's accumulated change
+        if not na(current_long) and not na(previous_long)
+            long_delta := current_long - previous_long
+            if (long_delta > 180)
+                long_delta -= 360
+            else if (long_delta < -180)
+                long_delta += 360
+            accumulated_change1 += long_delta
+
+        // Update all diagonal values using only Planet 1's accumulation
+        diagonal_value_1x1 := targetPrice1 + (scale_ratio1 * accumulated_change1) * mirror_out
+        diagonal_value_1x2 := targetPrice1 + (scale_ratio1 / 2) * accumulated_change1 * mirror_out
+        diagonal_value_2x1 := targetPrice1 + (scale_ratio1 * 2) * accumulated_change1 * mirror_out
+        diagonal_value_3x1 := targetPrice1 + (scale_ratio1 * 3) * accumulated_change1 * mirror_out
+        diagonal_value_4x1 := targetPrice1 + (scale_ratio1 * 4) * accumulated_change1 * mirror_out
+        diagonal_value_8x1 := targetPrice1 + (scale_ratio1 * 8) * accumulated_change1 * mirror_out
+        diagonal_value_1x3 := targetPrice1 + (scale_ratio1 / 3) * accumulated_change1 * mirror_out
+        diagonal_value_1x4 := targetPrice1 + (scale_ratio1 / 4) * accumulated_change1 * mirror_out
+        diagonal_value_1x8 := targetPrice1 + (scale_ratio1 / 8) * accumulated_change1 * mirror_out
+
+        // Set second set equal to first (so averaging in plots gives same result)
+        diagonal_value_2_1x1 := diagonal_value_1x1
+        diagonal_value_2_1x2 := diagonal_value_1x2
+        diagonal_value_2_2x1 := diagonal_value_2x1
+        diagonal_value_2_3x1 := diagonal_value_3x1
+        diagonal_value_2_4x1 := diagonal_value_4x1
+        diagonal_value_2_8x1 := diagonal_value_8x1
+        diagonal_value_2_1x3 := diagonal_value_1x3
+        diagonal_value_2_1x4 := diagonal_value_1x4
+        diagonal_value_2_1x8 := diagonal_value_1x8
+
+        average_accum := accumulated_change1
+
+    else if line_type == "Average"
+        if not na(current_long) and not na(previous_long)
+            // Planet 1: Calculate the difference between the current and previous longitudes
+            long_delta := current_long - previous_long
+            if (long_delta > 180)
+                long_delta -= 360
+            else if (long_delta < -180)
+                long_delta += 360
+            accumulated_change1 += long_delta
+
+        if not na(current_long_2) and not na(previous_long_2)
+            // Planet 2: Calculate the difference between the current and previous longitudes
+            long_delta_2 := current_long_2 - previous_long_2
+            if (long_delta_2 > 180)
+                long_delta_2 -= 360
+            else if (long_delta_2 < -180)
+                long_delta_2 += 360
+            accumulated_change2 += long_delta_2
+
+        // Update diagonal values for both planets
+        diagonal_value_1x1 := targetPrice1 + (scale_ratio1 * accumulated_change1) * mirror_out
+        diagonal_value_1x2 := targetPrice1 + (scale_ratio1 / 2) * accumulated_change1 * mirror_out
+        diagonal_value_2x1 := targetPrice1 + (scale_ratio1 * 2) * accumulated_change1 * mirror_out
+        diagonal_value_3x1 := targetPrice1 + (scale_ratio1 * 3) * accumulated_change1 * mirror_out
+        diagonal_value_4x1 := targetPrice1 + (scale_ratio1 * 4) * accumulated_change1 * mirror_out
+        diagonal_value_8x1 := targetPrice1 + (scale_ratio1 * 8) * accumulated_change1 * mirror_out
+        diagonal_value_1x3 := targetPrice1 + (scale_ratio1 / 3) * accumulated_change1 * mirror_out
+        diagonal_value_1x4 := targetPrice1 + (scale_ratio1 / 4) * accumulated_change1 * mirror_out
+        diagonal_value_1x8 := targetPrice1 + (scale_ratio1 / 8) * accumulated_change1 * mirror_out
+
+        diagonal_value_2_1x1 := targetPrice2 + (scale_ratio1 * accumulated_change2) * mirror_out
+        diagonal_value_2_1x2 := targetPrice2 + (scale_ratio1 / 2) * accumulated_change2 * mirror_out
+        diagonal_value_2_2x1 := targetPrice2 + (scale_ratio1 * 2) * accumulated_change2 * mirror_out
+        diagonal_value_2_3x1 := targetPrice2 + (scale_ratio1 * 3) * accumulated_change2 * mirror_out
+        diagonal_value_2_4x1 := targetPrice2 + (scale_ratio1 * 4) * accumulated_change2 * mirror_out
+        diagonal_value_2_8x1 := targetPrice2 + (scale_ratio1 * 8) * accumulated_change2 * mirror_out
+        diagonal_value_2_1x3 := targetPrice2 + (scale_ratio1 / 3) * accumulated_change2 * mirror_out
+        diagonal_value_2_1x4 := targetPrice2 + (scale_ratio1 / 4) * accumulated_change2 * mirror_out
+        diagonal_value_2_1x8 := targetPrice2 + (scale_ratio1 / 8) * accumulated_change2 * mirror_out
+
+        average_accum := math.avg(accumulated_change1, accumulated_change2)
+
+    else  // Synodic
+        if not na(current_syn) and not na(previous_syn)
+            float diff = current_syn - previous_syn
+            float adjusted_diff = diff
+            if diff < -180
+                adjusted_diff += 360.0
+            else if diff > 180
+                adjusted_diff -= 360.0
+            accumulated_syn += adjusted_diff
+
+        // Update diagonal values using accumulated_syn for both sets (to allow averaging)
+        diagonal_value_1x1 := targetPrice1 + (scale_ratio1 * accumulated_syn) * mirror_out
+        diagonal_value_1x2 := targetPrice1 + (scale_ratio1 / 2) * accumulated_syn * mirror_out
+        diagonal_value_2x1 := targetPrice1 + (scale_ratio1 * 2) * accumulated_syn * mirror_out
+        diagonal_value_3x1 := targetPrice1 + (scale_ratio1 * 3) * accumulated_syn * mirror_out
+        diagonal_value_4x1 := targetPrice1 + (scale_ratio1 * 4) * accumulated_syn * mirror_out
+        diagonal_value_8x1 := targetPrice1 + (scale_ratio1 * 8) * accumulated_syn * mirror_out
+        diagonal_value_1x3 := targetPrice1 + (scale_ratio1 / 3) * accumulated_syn * mirror_out
+        diagonal_value_1x4 := targetPrice1 + (scale_ratio1 / 4) * accumulated_syn * mirror_out
+        diagonal_value_1x8 := targetPrice1 + (scale_ratio1 / 8) * accumulated_syn * mirror_out
+
+        diagonal_value_2_1x1 := targetPrice2 + (scale_ratio1 * accumulated_syn) * mirror_out
+        diagonal_value_2_1x2 := targetPrice2 + (scale_ratio1 / 2) * accumulated_syn * mirror_out
+        diagonal_value_2_2x1 := targetPrice2 + (scale_ratio1 * 2) * accumulated_syn * mirror_out
+        diagonal_value_2_3x1 := targetPrice2 + (scale_ratio1 * 3) * accumulated_syn * mirror_out
+        diagonal_value_2_4x1 := targetPrice2 + (scale_ratio1 * 4) * accumulated_syn * mirror_out
+        diagonal_value_2_8x1 := targetPrice2 + (scale_ratio1 * 8) * accumulated_syn * mirror_out
+        diagonal_value_2_1x3 := targetPrice2 + (scale_ratio1 / 3) * accumulated_syn * mirror_out
+        diagonal_value_2_1x4 := targetPrice2 + (scale_ratio1 / 4) * accumulated_syn * mirror_out
+        diagonal_value_2_1x8 := targetPrice2 + (scale_ratio1 / 8) * accumulated_syn * mirror_out
+
+        average_accum := accumulated_syn
+
+    // Calculate the average accumulated change
+    // average_accum := math.avg(accumulated_change1, accumulated_change2)
+    cycles = math.round(average_accum / cycleUnit, 2)
+
+    // Conditionally create display string
+    cycleStr = showCycles ? " - Num of Cycles " + str.tostring(cycles, "#.##") : " "
+
+
+    // Extract the symbol (everything before the space)
+    planet_symbol = str.substring(planet1_in, 0, 1)
+    planet_symbol2 = str.substring(planet2_in, 0, 1)
+    // Determine abbreviation based on selection
+    abbr = line_type == "Single" ? "SGL" : (line_type == "Average" ? "AVG" : "SYN")
+
+    // Build the dynamic string
+    planet_string = line_type == "Single" ? planet_symbol : (planet_symbol == planet_symbol2 ? planet_symbol : planet_symbol + " | " + planet_symbol2 + " " + abbr + " :")
+
+
+    // Populate info table (top right corner)
+    if show_info_table
+        // Build mode string
+        mode_str = centricSign + " " + abbr
+
+        // Build planets string (Single mode shows only Planet 1)
+        planets_str = line_type == "Single" ? planet_symbol : (planet_symbol == planet_symbol2 ? planet_symbol : planet_symbol + " | " + planet_symbol2)
+
+        // Clear and populate table
+        table.cell(infoTable, 0, 0, "$/°", text_color=color.gray, text_size=label_text_size, text_halign=text.align_right)
+        table.cell(infoTable, 1, 0, "$" + str.tostring(scale_ratio1), text_color=col1_out, text_size=label_text_size, text_halign=text.align_left)
+
+        table.cell(infoTable, 0, 1, "Mode", text_color=color.gray, text_size=label_text_size, text_halign=text.align_right)
+        table.cell(infoTable, 1, 1, mode_str, text_color=col1_out, text_size=label_text_size, text_halign=text.align_left)
+
+        table.cell(infoTable, 0, 2, "Planets", text_color=color.gray, text_size=label_text_size, text_halign=text.align_right)
+        table.cell(infoTable, 1, 2, planets_str, text_color=col1_out, text_size=label_text_size, text_halign=text.align_left)
+
+        table.cell(infoTable, 0, 3, "Traveled", text_color=color.gray, text_size=label_text_size, text_halign=text.align_right)
+        table.cell(infoTable, 1, 3, str.tostring(average_accum, "#.##") + "°", text_color=col1_out, text_size=label_text_size, text_halign=text.align_left)
+
+        if showCycles
+            table.cell(infoTable, 0, 4, "Cycles", text_color=color.gray, text_size=label_text_size, text_halign=text.align_right)
+            table.cell(infoTable, 1, 4, str.tostring(cycles, "#.##"), text_color=col1_out, text_size=label_text_size, text_halign=text.align_left)
+
+    // Conditional label creation for each fan line using diagonal values
+    if (show_1x1)
+        label1x1 := label.new(x=bar_index + 5, y= math.avg(diagonal_value_1x1, diagonal_value_2_1x1), text="1x1", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label1x1[1])
+
+    if (show_1x2)
+        label1x2 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_1x2, diagonal_value_2_1x2), text="1x2", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label1x2[1])
+
+    if (show_2x1)
+        label2x1 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_2x1, diagonal_value_2_2x1), text="2x1", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label2x1[1])
+
+    if (show_1x3)
+        label1x3 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_1x3, diagonal_value_2_1x3), text="1x3", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label1x3[1])
+
+    if (show_3x1)
+        label3x1 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_3x1, diagonal_value_2_3x1), text="3x1", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label3x1[1])
+
+    if (show_1x4)
+        label1x4 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_1x4, diagonal_value_2_1x4), text="1x4", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label1x4[1])
+
+    if (show_4x1)
+        label4x1 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_4x1, diagonal_value_2_4x1), text="4x1", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label4x1[1])
+
+    if (show_1x8)
+        label1x8 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_1x8, diagonal_value_2_1x8), text="1x8", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label1x8[1])
+
+    if (show_8x1)
+        label8x1 := label.new(x=bar_index + 5, y=math.avg(diagonal_value_8x1, diagonal_value_2_8x1), text="8x1", color=color.new(color.white, 100), textcolor=col1_out, size=label_text_size, style=label.style_label_up)
+        label.delete(label8x1[1])
+
+
+        // Store the current longitudes for the next iteration
+    previous_long := current_long
+    previous_long_2 := current_long_2
+    previous_syn := current_syn
+
+
+// Plotting with conditionals based on user input and adding alerts
+p1x1 = show_1x1 ? math.avg(diagonal_value_1x1, diagonal_value_2_1x1): na
+p1x8 = show_1x8 ? math.avg(diagonal_value_1x8, diagonal_value_2_1x8): na
+p1x4 = show_1x4 ? math.avg(diagonal_value_1x4, diagonal_value_2_1x4): na
+p1x3 = show_1x3 ? math.avg(diagonal_value_1x3, diagonal_value_2_1x3): na
+p1x2 = show_1x2 ? math.avg(diagonal_value_1x2, diagonal_value_2_1x2): na
+p2x1 = show_2x1 ? math.avg(diagonal_value_2x1, diagonal_value_2_2x1): na
+p3x1 = show_3x1 ? math.avg(diagonal_value_3x1, diagonal_value_2_3x1): na
+p4x1 = show_4x1 ? math.avg(diagonal_value_4x1, diagonal_value_2_4x1): na
+p8x1 = show_8x1 ? math.avg(diagonal_value_8x1, diagonal_value_2_8x1): na
+
+
+// 1x1 Line uses the average planetary longitude for hue
+// plot(p1x1, color=color.hsv(math.avg(current_long, current_long_2), 1, 1, 1), title="1x1 Line")
+
+
+//
+hue_1x1 = line_type == "Average" ? math.avg(current_long, current_long_2) : current_syn
+anchor_hue = line_type == "Average" ? math.avg(anchor_long, anchor_long_2) : anchor_syn
+
+// // Plot the 1x1 line only when show_1x1 is true
+// plot(p1x1, color=not na(hue_1x1) ? color.hsv(hue_1x1, 1, 1, 1) : na, title="1x1 Line")
+
+// Conditional background color based on p1x1
+// bgcolor(not na(p1x1) ? color.new(color.hsv(hue_1x1, 1, 1, 1), 80) : na, title="Planetary Zone")
+
+
+// Other lines use planetary colors
+plot(p1x1, color=col1_out, title="1x1 Line")
+plot(p1x8, color=col1_out, title="1x8 Line")
+plot(p1x4, color=col1_out, title="1x4 Line")
+plot(p1x3, color=col1_out, title="1x3 Line")
+plot(p1x2, color=col1_out, title="1x2 Line")
+plot(p2x1, color=col1_out, title="2x1 Line")
+plot(p3x1, color=col1_out, title="3x1 Line")
+plot(p4x1, color=col1_out, title="4x1 Line")
+plot(p8x1, color=col1_out, title="8x1 Line")
+
+
+// ═══════════════════════════════════════════════════════════════════
+// Future Projections
+// ═══════════════════════════════════════════════════════════════════
+
+if show_projections and barstate.islast and time >= high_low_bar_time
+    // Clean up previous polylines
+    polyline.delete(proj_1x1)
+    polyline.delete(proj_1x2)
+    polyline.delete(proj_2x1)
+    polyline.delete(proj_1x3)
+    polyline.delete(proj_3x1)
+    polyline.delete(proj_1x4)
+    polyline.delete(proj_4x1)
+    polyline.delete(proj_1x8)
+    polyline.delete(proj_8x1)
+
+    // Clean up previous projection labels
+    label.delete(proj_label_1x1)
+    label.delete(proj_label_1x2)
+    label.delete(proj_label_2x1)
+    label.delete(proj_label_1x3)
+    label.delete(proj_label_3x1)
+    label.delete(proj_label_1x4)
+    label.delete(proj_label_4x1)
+    label.delete(proj_label_1x8)
+    label.delete(proj_label_8x1)
+
+    // Calculate bar gap in milliseconds
+    bar_gap = timeframe.in_seconds(timeframe.period) * 1000
+
+    // Initialize point arrays for each visible fan line
+    array<chart.point> pts_1x1 = array.new<chart.point>()
+    array<chart.point> pts_1x2 = array.new<chart.point>()
+    array<chart.point> pts_2x1 = array.new<chart.point>()
+    array<chart.point> pts_1x3 = array.new<chart.point>()
+    array<chart.point> pts_3x1 = array.new<chart.point>()
+    array<chart.point> pts_1x4 = array.new<chart.point>()
+    array<chart.point> pts_4x1 = array.new<chart.point>()
+    array<chart.point> pts_1x8 = array.new<chart.point>()
+    array<chart.point> pts_8x1 = array.new<chart.point>()
+
+    // Add current bar as first point (connects to historical plot)
+    if show_1x1
+        array.push(pts_1x1, chart.point.from_time(time, p1x1))
+    if show_1x2
+        array.push(pts_1x2, chart.point.from_time(time, p1x2))
+    if show_2x1
+        array.push(pts_2x1, chart.point.from_time(time, p2x1))
+    if show_1x3
+        array.push(pts_1x3, chart.point.from_time(time, p1x3))
+    if show_3x1
+        array.push(pts_3x1, chart.point.from_time(time, p3x1))
+    if show_1x4
+        array.push(pts_1x4, chart.point.from_time(time, p1x4))
+    if show_4x1
+        array.push(pts_4x1, chart.point.from_time(time, p4x1))
+    if show_1x8
+        array.push(pts_1x8, chart.point.from_time(time, p1x8))
+    if show_8x1
+        array.push(pts_8x1, chart.point.from_time(time, p8x1))
+
+    // Track accumulated changes for projection
+    float proj_accum1 = accumulated_change1
+    float proj_accum2 = accumulated_change2
+    float proj_accum_syn = accumulated_syn
+    float proj_prev_long1 = current_long
+    float proj_prev_long2 = current_long_2
+    float proj_prev_syn = current_syn
+    float proj_avg_accum = average_accum
+
+    // Track final values for end labels
+    float final_1x1 = p1x1
+    float final_1x2 = p1x2
+    float final_2x1 = p2x1
+    float final_1x3 = p1x3
+    float final_3x1 = p3x1
+    float final_1x4 = p1x4
+    float final_4x1 = p4x1
+    float final_1x8 = p1x8
+    float final_8x1 = p8x1
+
+    for i = 1 to look_ahead
+        future_time = time + (bar_gap * i)
+
+        // Get future planetary longitudes
+        future_long1 = f_get_planet_longitude(planet1_in, geo, future_time)
+        future_long2 = f_get_planet_longitude(planet2_in, geo, future_time)
+
+        if line_type == "Single"
+            // Single mode: Only use Planet 1's longitude
+            float delta1 = future_long1 - proj_prev_long1
+            if delta1 > 180
+                delta1 -= 360
+            else if delta1 < -180
+                delta1 += 360
+            proj_accum1 += delta1
+            proj_avg_accum := proj_accum1
+
+        else if line_type == "Average"
+            // Calculate longitude deltas with wraparound handling
+            float delta1 = future_long1 - proj_prev_long1
+            if delta1 > 180
+                delta1 -= 360
+            else if delta1 < -180
+                delta1 += 360
+            proj_accum1 += delta1
+
+            float delta2 = future_long2 - proj_prev_long2
+            if delta2 > 180
+                delta2 -= 360
+            else if delta2 < -180
+                delta2 += 360
+            proj_accum2 += delta2
+
+            proj_avg_accum := math.avg(proj_accum1, proj_accum2)
+
+        else // Synodic
+            float future_syn = normalize360(future_long1 - future_long2)
+            float syn_delta = future_syn - proj_prev_syn
+            if syn_delta < -180
+                syn_delta += 360
+            else if syn_delta > 180
+                syn_delta -= 360
+            proj_accum_syn += syn_delta
+            proj_avg_accum := proj_accum_syn
+            proj_prev_syn := future_syn
+
+        // Calculate projected fan values using same formulas as historical
+        float proj_1x1_val = targetPrice1 + (scale_ratio1 * proj_avg_accum) * mirror_out
+        float proj_1x2_val = targetPrice1 + (scale_ratio1 / 2) * proj_avg_accum * mirror_out
+        float proj_2x1_val = targetPrice1 + (scale_ratio1 * 2) * proj_avg_accum * mirror_out
+        float proj_1x3_val = targetPrice1 + (scale_ratio1 / 3) * proj_avg_accum * mirror_out
+        float proj_3x1_val = targetPrice1 + (scale_ratio1 * 3) * proj_avg_accum * mirror_out
+        float proj_1x4_val = targetPrice1 + (scale_ratio1 / 4) * proj_avg_accum * mirror_out
+        float proj_4x1_val = targetPrice1 + (scale_ratio1 * 4) * proj_avg_accum * mirror_out
+        float proj_1x8_val = targetPrice1 + (scale_ratio1 / 8) * proj_avg_accum * mirror_out
+        float proj_8x1_val = targetPrice1 + (scale_ratio1 * 8) * proj_avg_accum * mirror_out
+
+        // Average with planet 2 diagonal values
+        float proj_2_1x1_val = targetPrice2 + (scale_ratio1 * proj_avg_accum) * mirror_out
+        float proj_2_1x2_val = targetPrice2 + (scale_ratio1 / 2) * proj_avg_accum * mirror_out
+        float proj_2_2x1_val = targetPrice2 + (scale_ratio1 * 2) * proj_avg_accum * mirror_out
+        float proj_2_1x3_val = targetPrice2 + (scale_ratio1 / 3) * proj_avg_accum * mirror_out
+        float proj_2_3x1_val = targetPrice2 + (scale_ratio1 * 3) * proj_avg_accum * mirror_out
+        float proj_2_1x4_val = targetPrice2 + (scale_ratio1 / 4) * proj_avg_accum * mirror_out
+        float proj_2_4x1_val = targetPrice2 + (scale_ratio1 * 4) * proj_avg_accum * mirror_out
+        float proj_2_1x8_val = targetPrice2 + (scale_ratio1 / 8) * proj_avg_accum * mirror_out
+        float proj_2_8x1_val = targetPrice2 + (scale_ratio1 * 8) * proj_avg_accum * mirror_out
+
+        // Final averaged values
+        final_1x1 := math.avg(proj_1x1_val, proj_2_1x1_val)
+        final_1x2 := math.avg(proj_1x2_val, proj_2_1x2_val)
+        final_2x1 := math.avg(proj_2x1_val, proj_2_2x1_val)
+        final_1x3 := math.avg(proj_1x3_val, proj_2_1x3_val)
+        final_3x1 := math.avg(proj_3x1_val, proj_2_3x1_val)
+        final_1x4 := math.avg(proj_1x4_val, proj_2_1x4_val)
+        final_4x1 := math.avg(proj_4x1_val, proj_2_4x1_val)
+        final_1x8 := math.avg(proj_1x8_val, proj_2_1x8_val)
+        final_8x1 := math.avg(proj_8x1_val, proj_2_8x1_val)
+
+        // Add points to arrays
+        if show_1x1
+            array.push(pts_1x1, chart.point.from_time(future_time, final_1x1))
+        if show_1x2
+            array.push(pts_1x2, chart.point.from_time(future_time, final_1x2))
+        if show_2x1
+            array.push(pts_2x1, chart.point.from_time(future_time, final_2x1))
+        if show_1x3
+            array.push(pts_1x3, chart.point.from_time(future_time, final_1x3))
+        if show_3x1
+            array.push(pts_3x1, chart.point.from_time(future_time, final_3x1))
+        if show_1x4
+            array.push(pts_1x4, chart.point.from_time(future_time, final_1x4))
+        if show_4x1
+            array.push(pts_4x1, chart.point.from_time(future_time, final_4x1))
+        if show_1x8
+            array.push(pts_1x8, chart.point.from_time(future_time, final_1x8))
+        if show_8x1
+            array.push(pts_8x1, chart.point.from_time(future_time, final_8x1))
+
+        // Update previous values for next iteration
+        proj_prev_long1 := future_long1
+        proj_prev_long2 := future_long2
+
+    // Create polylines with dotted style and transparency
+    proj_col = color.new(col1_out, proj_transparency)
+
+    if show_1x1 and array.size(pts_1x1) > 1
+        proj_1x1 := polyline.new(pts_1x1, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_1x2 and array.size(pts_1x2) > 1
+        proj_1x2 := polyline.new(pts_1x2, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_2x1 and array.size(pts_2x1) > 1
+        proj_2x1 := polyline.new(pts_2x1, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_1x3 and array.size(pts_1x3) > 1
+        proj_1x3 := polyline.new(pts_1x3, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_3x1 and array.size(pts_3x1) > 1
+        proj_3x1 := polyline.new(pts_3x1, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_1x4 and array.size(pts_1x4) > 1
+        proj_1x4 := polyline.new(pts_1x4, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_4x1 and array.size(pts_4x1) > 1
+        proj_4x1 := polyline.new(pts_4x1, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_1x8 and array.size(pts_1x8) > 1
+        proj_1x8 := polyline.new(pts_1x8, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+    if show_8x1 and array.size(pts_8x1) > 1
+        proj_8x1 := polyline.new(pts_8x1, xloc=xloc.bar_time, line_color=proj_col, line_style=line.style_solid)
+
+    // Add dual labels at projection end (current bar labels already exist above)
+    future_end_time = time + (bar_gap * look_ahead)
+    if show_proj_labels
+        if show_1x1
+            proj_label_1x1 := label.new(x=future_end_time, y=final_1x1, text="1x1", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_1x2
+            proj_label_1x2 := label.new(x=future_end_time, y=final_1x2, text="1x2", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_2x1
+            proj_label_2x1 := label.new(x=future_end_time, y=final_2x1, text="2x1", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_1x3
+            proj_label_1x3 := label.new(x=future_end_time, y=final_1x3, text="1x3", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_3x1
+            proj_label_3x1 := label.new(x=future_end_time, y=final_3x1, text="3x1", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_1x4
+            proj_label_1x4 := label.new(x=future_end_time, y=final_1x4, text="1x4", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_4x1
+            proj_label_4x1 := label.new(x=future_end_time, y=final_4x1, text="4x1", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_1x8
+            proj_label_1x8 := label.new(x=future_end_time, y=final_1x8, text="1x8", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+        if show_8x1
+            proj_label_8x1 := label.new(x=future_end_time, y=final_8x1, text="8x1", xloc=xloc.bar_time, color=color.new(color.white, 100), textcolor=proj_col, size=label_text_size, style=label.style_label_up)
+
+
+
+/// COLOR WORKS 
+var bool color_bar = false 
+
+if (time >= high_low_bar_time) and show_orbital_clr
+    color_bar := true
+
+
+getHue(sign) =>
+    var float hue = na
+    if sign == "Aries"
+        hue := 0
+    else if sign == "Taurus"
+        hue := 30
+    else if sign == "Gemini"
+        hue := 60
+    else if sign == "Cancer"
+        hue := 90
+    else if sign == "Leo"
+        hue := 120
+    else if sign == "Virgo"
+        hue := 150
+    else if sign == "Libra"
+        hue := 180
+    else if sign == "Scorpio"
+        hue := 210
+    else if sign == "Sagittarius"
+        hue := 240
+    else if sign == "Capricorn"
+        hue := 270
+    else if sign == "Aquarius"
+        hue := 300
+    else if sign == "Pisces"
+        hue := 330
+    hue
+
+
+getSignFromDegree(deg) =>
+    d = deg % 360  // wrap around if deg ≥ 360
+    sign = d >= 0   and d < 30  ? "Aries" :
+           d >= 30  and d < 60  ? "Taurus" :
+           d >= 60  and d < 90  ? "Gemini" :
+           d >= 90  and d < 120 ? "Cancer" :
+           d >= 120 and d < 150 ? "Leo" :
+           d >= 150 and d < 180 ? "Virgo" :
+           d >= 180 and d < 210 ? "Libra" :
+           d >= 210 and d < 240 ? "Scorpio" :
+           d >= 240 and d < 270 ? "Sagittarius" :
+           d >= 270 and d < 300 ? "Capricorn" :
+           d >= 300 and d < 330 ? "Aquarius" :
+           d >= 330 and d < 360 ? "Pisces" :
+           na
+
+
+getColor(sign) =>
+    // Base hue from sign name
+    baseHue = getHue(sign)
+
+    // Custom hue tweaks
+    hue = sign == "Cancer"      ? 80 :  // green-blue
+          sign == "Leo"         ? 115 :  // sharp electric lime
+          sign == "Virgo"       ? 155 :  // teal-aqua
+          sign == "Pisces"      ? 325 :  // shift away from Aries
+          sign == "Aries"       ? 0   :  // keep Aries bold red
+          baseHue
+
+    // Custom saturation per sign
+    sat = sign == "Leo"         ? 1.0  :
+          sign == "Pisces"      ? 0.9  :
+          sign == "Cancer"      ? 0.85 :
+          sign == "Virgo"       ? 0.9  :
+          sign == "Aquarius"    ? 0.95 :  // soft magenta
+          1.0
+
+    // Custom brightness per sign
+    val = sign == "Virgo"       ? 0.8  :
+          sign == "Pisces"      ? 0.8  :
+          sign == "Cancer"      ? 0.95 :
+          1.0
+
+    color.hsv(hue, sat, val, 1)
+
+sign_bar = getSignFromDegree(hue_1x1)
+
+
+barcolor( color_bar ? getColor(sign_bar): na)
+
+/// COLOR WORKS 
+
+
+
+
+// Zodiac and Longitude Relationship Table 
+var table aspectTable = table.new(position.bottom_right, 12, 13, border_width=1)
+
+// === Header Labels ===
+headerLabels = array.from("","","","Start &\n☌", "90°\n□", "120°\n△", "180°\n☍", "240°\n△", "270°\n□", "        ", "60°\n✶", "300°\n✶")
+zodiacGlyphs = array.from("♈︎", "♉︎", "♊︎", "♋︎", "♌︎", "♍︎", "♎︎", "♏︎", "♐︎", "♑︎", "♒︎", "♓︎")
+
+
+var row11 = array.from("Pisces", "Gemini", "Cancer", "Virgo", "Scorpio", "Sagittarius", "Taurus", "Capricorn")
+var row10 = array.from("Aquarius", "Taurus", "Gemini", "Leo", "Libra", "Scorpio", "Aries", "Sagittarius")
+var row9 = array.from("Capricorn", "Aries", "Taurus", "Cancer", "Virgo", "Libra", "Pisces", "Scorpio")
+var row8 = array.from("Sagittarius", "Pisces", "Aries", "Gemini", "Leo", "Virgo", "Aquarius", "Libra")
+var row7 = array.from("Scorpio", "Aquarius", "Pisces", "Taurus", "Cancer", "Leo", "Capricorn", "Virgo")
+var row6 = array.from("Libra", "Capricorn", "Aquarius", "Aries", "Gemini", "Cancer", "Sagittarius", "Leo")
+var row5 = array.from("Virgo", "Sagittarius", "Capricorn", "Pisces", "Taurus", "Gemini", "Scorpio", "Cancer")
+var row4 = array.from("Leo", "Scorpio", "Sagittarius", "Aquarius", "Aries", "Taurus", "Libra", "Gemini")
+var row3 = array.from("Cancer", "Libra", "Scorpio", "Capricorn", "Pisces", "Aries", "Virgo", "Taurus")
+var row2 = array.from("Gemini", "Virgo", "Libra", "Sagittarius", "Aquarius", "Pisces", "Leo", "Aries")
+var row1 = array.from("Taurus", "Leo", "Virgo", "Scorpio", "Capricorn", "Aquarius", "Cancer", "Pisces")
+var row0 = array.from("Aries", "Cancer", "Leo", "Libra", "Sagittarius", "Capricorn", "Gemini", "Aquarius")
+
+
+if barstate.islast and show_clr_tab
+    // Header row
+    for col = 0 to 11
+        label = array.get(headerLabels, col)
+        table.cell(aspectTable, col, 0, label, text_color=tab_text_clr, text_size= label_text_size, text_formatting = text.format_bold)
+
+    // Zodiac rows
+    for row = 0 to 11
+        currentRow = row == 0  ? row0 :
+                     row == 1  ? row1 :
+                     row == 2  ? row2 :
+                     row == 3  ? row3 :
+                     row == 4  ? row4 :
+                     row == 5  ? row5 :
+                     row == 6  ? row6 :
+                     row == 7  ? row7 :
+                     row == 8  ? row8 :
+                     row == 9  ? row9 :
+                     row == 10 ? row10 :
+                                 row11
+
+        glyph = array.get(zodiacGlyphs, row)
+        deg   = row * 30
+        inRange = hue_1x1 >= deg and hue_1x1 < deg + 30
+        pointer = inRange ? "▶" : ""
+        anchor  = (anchor_hue >= deg and anchor_hue < deg + 30) ? "⚓" : ""
+
+        // Column 0: pointer
+        table.cell(aspectTable, 0, row + 1, pointer, text_color= tab_text_clr, text_halign=text.align_center, tooltip = f_degsignf(hue_1x1), text_size = label_text_size)
+
+        // Column 1: anchor
+        table.cell(aspectTable, 1, row + 1, anchor, text_halign=text.align_center, tooltip = f_degsignf(anchor_hue), text_size = label_text_size)
+
+        // Column 2: glyph
+        table.cell(aspectTable, 2, row + 1, glyph, text_color=#000000, text_size = label_text_size)
+
+        // Columns 2–10: aspects
+        for col = 3 to 11
+            if col == 3
+                trueCol = col < 9 ? col - 3 : col - 4
+                sign = array.get(currentRow, trueCol)
+                table.cell(aspectTable, col, row + 1, sign, bgcolor=getColor(sign), text_color=#000000, text_formatting = text.format_bold, text_size = label_text_size)
+            else if col == 9
+                table.cell(aspectTable, col, row + 1, "", bgcolor=color.new(color.gray, 85))
+            else
+                trueCol = col < 9 ? col - 3 : col - 4
+                sign = array.get(currentRow, trueCol)
+                table.cell(aspectTable, col, row + 1, sign, bgcolor=getColor(sign), text_color=#000000, text_formatting = text.format_italic, text_size = label_text_size)
+
+
+
+
+// Alert conditions
+alertcondition(ta.cross(close, p1x1), title="1x1 Cross", message="Price crossed the 1x1 Line")
+alertcondition(ta.cross(close, p1x8), title="1x8 Cross", message="Price crossed the 1x8 Line")
+alertcondition(ta.cross(close, p1x4), title="1x4 Cross", message="Price crossed the 1x4 Line")
+alertcondition(ta.cross(close, p1x3), title="1x3 Cross", message="Price crossed the 1x3 Line")
+alertcondition(ta.cross(close, p1x2), title="1x2 Cross", message="Price crossed the 1x2 Line")
+alertcondition(ta.cross(close, p2x1), title="2x1 Cross", message="Price crossed the 2x1 Line")
+alertcondition(ta.cross(close, p3x1), title="3x1 Cross", message="Price crossed the 3x1 Line")
+alertcondition(ta.cross(close, p4x1), title="4x1 Cross", message="Price crossed the 4x1 Line")
+alertcondition(ta.cross(close, p8x1), title="8x1 Cross", message="Price crossed the 8x1 Line")
+

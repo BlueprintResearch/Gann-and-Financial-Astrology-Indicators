@@ -140,12 +140,20 @@ Square of Nine progression/regression tool for price analysis.
 
 ---
 
-## Planetary Ephemeris Libraries
+## Planetary Ephemeris Library
 
-These indicators are powered by the **Blueprint Research Planetary Ephemeris** — a complete suite of 11 Pine Script libraries implementing VSOP87, ELP2000-82, and Meeus algorithms.
+These indicators are powered by **blueprint_ephemeris_lib** — a consolidated Pine Script library implementing VSOP87D, ELP2000-82, and Meeus algorithms with sub-arcminute precision validated against NASA's DE440 ephemeris.
 
-**Repository:** [BlueprintResearch/planetary-ephemeris](https://github.com/BlueprintResearch/planetary-ephemeris)  
+**TradingView:** [blueprint_ephemeris_lib](https://www.tradingview.com/script/f7cvFJjG-blueprint-ephemeris-lib/)
+**Repository:** [BlueprintResearch/planetary-ephemeris](https://github.com/BlueprintResearch/planetary-ephemeris)
 **License:** MIT (the math is free for any use)
+
+The v2 rewrite consolidated the original 11 libraries into one, fixed critical L1[0] precession coefficient errors across all VSOP87 planets, and reduced code size by 28%.
+
+<details>
+<summary>Legacy libraries (v1)</summary>
+
+The original 11 separate libraries remain available but will be updated with the fix. Use `blueprint_ephemeris_lib` for new work.
 
 | Library | Body | TradingView |
 |---------|------|-------------|
@@ -160,6 +168,8 @@ These indicators are powered by the **Blueprint Research Planetary Ephemeris** �
 | lib_elp2000_moon | Moon | [Link](https://www.tradingview.com/script/XsQ6sAXD-lib-elp2000-moon/) |
 | lib_meeus_pluto | Pluto | [Link](https://www.tradingview.com/script/E1N99jzO-lib-meeus-pluto/) |
 | lib_ephemeris | Master | [Link](https://www.tradingview.com/script/RcA3QSO7-lib-ephemeris/) |
+
+</details>
 
 ---
 
@@ -198,6 +208,11 @@ Mikula's work is the reason these indicators exist. His willingness to publish w
 - Square of Nine grid visualization adapted from "Gann Square of 9" (Feb 2023)
 - [Gann Square of 9](https://www.tradingview.com/script/cSzck7Kl-Gann-Square-of-9/)
 
+### Greg Miller
+- VSOP87 coefficient validation via his [vsop87-multilang](https://github.com/gmiller123456/vsop87-multilang) project, which provided complete VSOP87D coefficient tables in accessible formats
+- Instrumental in discovering L1[0] precession errors affecting all 8 VSOP87 planets in the original libraries
+- Released into the public domain
+
 ### Susan Abbott Gidel
 - First trade dates for commodities and financial instruments
 - *Trading In Sync With Commodities: Introducing Astrology To Your Technical Toolbox*
@@ -207,7 +222,7 @@ Mikula's work is the reason these indicators exist. His willingness to publish w
 ## Dependencies
 
 Astro Indicators are built using:
-- [BlueprintResearch/lib_ephemeris](https://www.tradingview.com/script/RcA3QSO7-lib-ephemeris/) 
+- [BlueprintResearch/blueprint_ephemeris_lib](https://www.tradingview.com/script/f7cvFJjG-blueprint-ephemeris-lib/)
 
 ---
 
